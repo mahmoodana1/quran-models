@@ -87,12 +87,15 @@ const Match = (() => {
   }
   const SHADDA = 0.3; // a doubled letter said single, or a single one said doubled: not reported
   const PAUSE = 0.25; // what a pause between words changes: not reported
+  const LEAD = 0.3;   // each sound heard before the aya begins, with opt.freeLead (less than a wrong letter)
 
-  // expected: { ph, spans: [[start, end) per word] } in script characters
+  // expected: { ph, spans: [[start, end) per word] } in script characters,
+// and which words start with hamzat al-wasl: wasl (indices) or words (text)
   // heard: the model's text so far; finalLen: how much of it is final;
   // done: the reciter stopped, so the whole aya must be accounted for
-  // returns per word { state: 'ok'|'err'|'hear'|'todo', type, heard }
-  function words(expected, heard, finalLen = heard.length, done = false) {
+  // opt.freeLead: what was heard before the aya (a basmala, an isti'adha) costs nothing
+  // returns per word { state: 'ok'|'err'|'hear'|'todo', type, heard, at }
+  function words(expected, heard, finalLen = heard.length, done = false, opt = {}) {
     if (!expected._u) prepare(expected);
     const E = expected._u, edge = expected._edge, H = units(heard);
     const hFinal = units(heard.slice(0, finalLen)).length;
@@ -117,7 +120,7 @@ const Match = (() => {
     for (let i = 1; i <= n; i++) {
       const r = i * W, p = r - W, h = H[i - 1];
       const ic = LET[h] && i > 1 && H[i - 2] === h ? SHADDA : INSC[h];
-      cost[r] = cost[p] + ic; back[r] = 3;
+      cost[r] = cost[p] + (opt.freeLead ? LEAD : ic); back[r] = 3;
       for (let j = 1; j <= m; j++) {
         let c = cost[p + j - 1] + subc(j - 1, h), b = 1;
         const d = cost[r + j - 1] + dcost[j - 1];
@@ -184,7 +187,7 @@ const Match = (() => {
     ex._w.forEach(([a, b], i) => {
       if (b <= a) return;
       ex._edge[b - 1] = 1; if (b - 2 >= a) ex._edge[b - 2] = 1;
-      if (ex.words?.[i]?.startsWith('ٱ') && !ex._edge[a]) ex._edge[a] = 2;
+      if ((ex.wasl ? ex.wasl.includes(i) : ex.words?.[i]?.startsWith('ٱ')) && !ex._edge[a]) ex._edge[a] = 2;
     });
   }
 
