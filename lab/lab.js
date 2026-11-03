@@ -93,6 +93,41 @@ function newRing() {
   if (!self.crossOriginIsolated || typeof SharedArrayBuffer === 'undefined') return null;
   return { ring: new Float32Array(new SharedArrayBuffer(4 * RATE * 30)), meta: new Int32Array(new SharedArrayBuffer(4)), time: new Float64Array(new SharedArrayBuffer(8)) };
 }
+// ---- finding the fastest candidate on this phone, before downloading anything
+const PROBE_X = 12; // a full update ≈ this many times the probe (two of 24 layers, plus the rest)
+function probePhone() {
+  const list = CANDS.filter(c => !(c.ep === 'webgpu' && (!gpu || (c.f16 && !gpu.f16))));
+  const out = $('#probeOut'), res = {};
+  out.innerHTML = list.map(c => `<div id="pr-${c.id}"><span>${c.name} <span class="note">· ${c.mb} MB</span></span><b>…</b><span class="barp"><i style="width:0"></i></span></div>`).join('')
+    + CANDS.filter(c => !list.includes(c)).map(c => `<div class="na"><span>${c.name}</span><span>not on this phone</span></div>`).join('');
+  $('#probe').disabled = true; $('#pickRow').hidden = true;
+  const w = new Worker('worker.js', { type: 'module' });
+  w.onmessage = ({ data: d }) => {
+    if (d.type === 'probed') {
+      res[d.id] = d;
+      const row = $('#pr-' + d.id);
+      row.querySelector('b').textContent = d.error ? 'failed' : `≈ ${Math.round(d.ms * PROBE_X)} ms per update`;
+      if (d.error) row.classList.add('na'), row.title = d.error;
+    }
+    if (d.type === 'probedAll') {
+      w.terminate();
+      $('#probe').disabled = false; $('#probe').textContent = 'Test again';
+      const ok = list.filter(c => res[c.id] && !res[c.id].error);
+      if (!ok.length) return;
+      const fastest = Math.min(...ok.map(c => res[c.id].ms));
+      ok.forEach(c => { $('#pr-' + c.id + ' .barp i').style.width = (fastest / res[c.id].ms * 100).toFixed(0) + '%'; });
+      // the fastest; within 10% of it, the smaller download
+      const best = ok.filter(c => res[c.id].ms <= fastest * 1.1).sort((a, b) => a.mb - b.mb || res[a.id].ms - res[b.id].ms)[0];
+      $('#pr-' + best.id).classList.add('best');
+      store.set('lab.best', { id: best.id, at: Date.now(), ms: res[best.id].ms * PROBE_X });
+      $('#getBest').textContent = `Download ${best.name} (${best.mb} MB)`;
+      $('#getBest').onclick = () => { document.querySelector(`input[value="${best.id}"]`).click(); load(); $('#lstatus').scrollIntoView({ block: 'center', behavior: 'smooth' }); };
+      $('#pickRow').hidden = false;
+    }
+  };
+  w.postMessage({ type: 'probe', list: list.map(({ id, variant, ep }) => ({ id, variant, ep })), threads: +$('#threads').value });
+}
+
 // ---- loading a candidate
 let worker = null, cur = null, ready = false, loadMs = 0;
 function load() {
@@ -331,6 +366,7 @@ function copy() {
 }
 
 $('#load').onclick = load;
+$('#probe').onclick = probePhone;
 $('#bench').onclick = bench;
 $('#stopb').onclick = () => { stopping = true; stopper?.(); };
 $('#mic').onclick = toggleMic;

@@ -128,8 +128,36 @@ async function loop() {
   }
 }
 
+// time each candidate on this device with its probe (the first two encoder
+// layers, weights filled in on load: a few hundred KB instead of the model)
+async function probe({ list, threads }) {
+  ort ||= await import(ORT + 'ort.webgpu.min.mjs');
+  ort.env.wasm.wasmPaths = ORT;
+  ort.env.wasm.numThreads = self.crossOriginIsolated ? threads : 1;
+  const feats = new Float32Array(125 * 160);
+  for (let i = 0; i < feats.length; i++) feats[i] = Math.sin(i * 0.37) * 1.5; // 2.5 s worth of input
+  const x = new ort.Tensor('float32', feats, [1, 125, 160]);
+  for (const c of list) {
+    try {
+      const t0 = performance.now();
+      const s = await ort.InferenceSession.create(BASE + `muaalem/probe/${c.variant}.onnx`, { executionProviders: [c.ep], graphOptimizationLevel: 'all' });
+      const run = async () => { const o = await s.run({ input_features: x }); for (const v of Object.values(o)) { await v.getData(); v.dispose?.(); } };
+      for (let i = 0; i < 3; i++) await run(); // warm up (GPU shaders compile here)
+      const load = performance.now() - t0, ms = [];
+      for (let i = 0; i < 7; i++) { const t = performance.now(); await run(); ms.push(performance.now() - t); }
+      ms.sort((a, b) => a - b);
+      await s.release?.();
+      postMessage({ type: 'probed', id: c.id, ms: ms[3], load });
+    } catch (e) {
+      postMessage({ type: 'probed', id: c.id, error: String(e.message || e).slice(0, 160) });
+    }
+  }
+  postMessage({ type: 'probedAll' });
+}
+
 onmessage = async ({ data }) => {
   try {
+    if (data.type === 'probe') await probe(data);
     if (data.type === 'load') await load(data);
     if (data.type === 'start') {
       live = false; await looping;
