@@ -39,3 +39,12 @@ In Chromium on 4 cores this takes about 250 ms per update, and gives the same te
 ## Licence
 
 The weights are a derivative of `hifzguide-muaalem-mini`, so they are licensed under **AGPL-3.0** (`LICENSE`); see `muaalem/NOTICE.md` for the lineage (Muaalem by obadx, MIT). The lab and the conversion scripts are AGPL-3.0 as well.
+
+## Whisper (the other riwayat)
+
+`whisper/` keeps copies of the two Quran Whisper models the app uses outside Hafs, in the layout transformers.js expects (`env.remoteHost` points here):
+
+- `An0xity/whisper-base-ar-quran-onnx-timestamped` (8-bit): an ONNX export of [`tarteel-ai/whisper-base-ar-quran`](https://huggingface.co/tarteel-ai/whisper-base-ar-quran).
+- `Sharjeelbaig/whisper-tiny-ar-quran-onnx` (encoder fp32, decoder 8-bit): an ONNX export of [`tarteel-ai/whisper-tiny-ar-quran`](https://huggingface.co/tarteel-ai/whisper-tiny-ar-quran).
+
+Both are Apache-2.0, like the Tarteel models they come from.
