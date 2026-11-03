@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Muaalem Phone Lab</title>
 <meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Amiri+Quran&display=swap">
 <style>
-:root { --bg: #f6f4ef; --card: #fff; --ink: #1d1d1b; --mute: #6d6a63; --line: #e4e0d6; --acc: #2f6f5e; --acc2: #e8f1ee; --warn: #b4542d; --tent: #9a968c; }
-@media (prefers-color-scheme: dark) { :root { --bg: #151614; --card: #1f201d; --ink: #ecebe6; --mute: #9b988f; --line: #33342f; --acc: #6cc0a5; --acc2: #22322d; --warn: #e48a62; --tent: #77746c; } }
+:root { --bg: #f6f4ef; --card: #fff; --ink: #1d1d1b; --mute: #6d6a63; --line: #e4e0d6; --acc: #2f6f5e; --acc2: #e8f1ee; --warn: #b4542d; --warn2: #fbe9e1; --tent: #a8a49a; }
+@media (prefers-color-scheme: dark) { :root { --bg: #151614; --card: #1f201d; --ink: #ecebe6; --mute: #9b988f; --line: #33342f; --acc: #6cc0a5; --acc2: #22322d; --warn: #e48a62; --warn2: #3a2620; --tent: #6a675f; } }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { max-width: 640px; margin: 0 auto; padding: 16px 16px 48px; }
@@ -25,32 +27,47 @@ h1 { font-size: 20px; margin: 4px 0 2px; }
 .cand.off { opacity: .45; cursor: not-allowed; }
 .cand:has(input:checked) { border-color: var(--acc); background: var(--acc2); }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.row label { font-size: 13px; color: var(--mute); display: flex; align-items: center; gap: 6px; }
 button { font: inherit; border: 0; border-radius: 10px; padding: 10px 14px; background: var(--acc); color: #fff; font-weight: 600; cursor: pointer; }
 button.ghost { background: transparent; color: var(--acc); border: 1px solid var(--acc); }
 button:disabled { opacity: .45; cursor: default; }
 button.rec { background: var(--warn); }
-select { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+select { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); max-width: 100%; }
 .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 10px; }
 .bar i { display: block; height: 100%; width: 0; background: var(--acc); transition: width .2s; }
 .status { color: var(--mute); font-size: 13px; margin-top: 8px; min-height: 1.4em; }
 .status.err { color: var(--warn); }
-.out { direction: rtl; text-align: right; font-size: 26px; line-height: 1.9; min-height: 3.6em; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); word-break: break-all; font-family: "Amiri", "Noto Naskh Arabic", "Scheherazade New", serif; }
-.out .t { color: var(--tent); }
+.ref { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--mute); margin-top: 12px; }
+.aya { direction: rtl; text-align: right; font-family: "Amiri Quran", "Amiri", serif; font-size: 27px; line-height: 2.25; min-height: 2.6em; padding: 4px 12px 8px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); margin-top: 6px; }
+.aya .w { transition: color .2s, background .2s; border-radius: 6px; padding: 0 2px; }
+.aya .todo { color: var(--tent); }
+.aya .hear { color: var(--ink); background: var(--acc2); }
+.aya .ok { color: var(--acc); }
+.aya .err { color: var(--warn); background: var(--warn2); text-decoration: underline dotted; text-underline-offset: 8px; }
+.snd { direction: rtl; text-align: right; font-size: 15px; color: var(--mute); margin-top: 6px; word-break: break-all; }
+.snd b { font-weight: 500; font-size: 11px; direction: ltr; display: inline-block; margin-left: 6px; }
+.snd .t { color: var(--tent); }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
 .stat { background: var(--bg); border-radius: 10px; padding: 8px 10px; }
 .stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
 .stat span { font-size: 11px; color: var(--mute); }
+.log { font-size: 12.5px; margin-top: 10px; max-height: 220px; overflow: auto; }
+.log div { padding: 4px 0; border-bottom: 1px solid var(--line); display: flex; gap: 8px; }
+.log .k { color: var(--mute); min-width: 7.5em; }
+.log .bad { color: var(--warn); direction: rtl; font-family: "Amiri Quran", serif; }
 table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
-th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--mute); font-weight: 500; }
 td.best { color: var(--acc); font-weight: 700; }
 .note { font-size: 12.5px; color: var(--mute); }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--mute); margin-top: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
 </style>
 </head>
 <body>
 <main>
   <h1>Muaalem Phone Lab</h1>
-  <p class="sub">Try each model candidate on this phone: how fast it writes what you recite, with harakat.</p>
+  <p class="sub">Try each model candidate on this phone: how fast and how well it follows recitation, word by word.</p>
 
   <section class="card">
     <h2>This device</h2>
@@ -61,7 +78,7 @@ td.best { color: var(--acc); font-weight: 700; }
     <h2>1 · Pick a candidate</h2>
     <div class="cands" id="cands"></div>
     <div class="row">
-      <label class="note">CPU threads <select id="threads"></select></label>
+      <label>CPU threads <select id="threads"></select></label>
       <button id="load">Load</button>
       <button class="ghost" id="clear">Delete downloads</button>
     </div>
@@ -72,29 +89,46 @@ td.best { color: var(--acc); font-weight: 700; }
   <section class="card">
     <h2>2 · Test it</h2>
     <div class="row" style="margin-top:0">
-      <button id="bench" disabled>Benchmark (Husary)</button>
+      <label>Reciter <select id="reciter"></select></label>
+      <label>Ayat <select id="set"></select></label>
+      <label><input type="checkbox" id="sound" checked> Sound</label>
+    </div>
+    <div class="row">
+      <button id="bench" disabled>Run benchmark</button>
+      <button class="ghost" id="stopb" hidden>Stop</button>
+    </div>
+    <div class="row">
+      <label>Recite yourself <select id="liveAya"></select></label>
       <button class="rec" id="mic" disabled>Recite live</button>
     </div>
-    <p class="note">Benchmark plays al-Mulk 1 and al-Fatiha 2 through the model in real time (nothing is played aloud). Recite live uses your microphone; grey letters are still being decided.</p>
-    <div class="out" id="out"></div>
+    <div class="ref"><span id="refL"></span><span id="refR"></span></div>
+    <div class="aya" id="aya"></div>
+    <div class="legend"><span><i style="background:var(--tent)"></i>to come</span><span><i style="background:var(--acc2);outline:1px solid var(--acc)"></i>hearing</span><span><i style="background:var(--acc)"></i>right</span><span><i style="background:var(--warn)"></i>mistake</span></div>
+    <div class="row"><label><input type="checkbox" id="showSnd"> Show the sounds (model output)</label></div>
+    <div id="snd" hidden>
+      <div class="snd"><b>expected</b><span id="sndE"></span></div>
+      <div class="snd"><b>heard</b><span id="sndH"></span></div>
+    </div>
     <div class="stats">
       <div class="stat"><b id="sMs">–</b><span>ms per update</span></div>
-      <div class="stat"><b id="sLag">–</b><span>ms behind your voice</span></div>
-      <div class="stat"><b id="sAcc">–</b><span>match with reference</span></div>
+      <div class="stat"><b id="sLag">–</b><span>ms behind the voice</span></div>
+      <div class="stat"><b id="sAcc">–</b><span>words right</span></div>
     </div>
     <div class="status" id="tstatus"></div>
+    <div class="log" id="log"></div>
   </section>
 
   <section class="card">
     <h2>3 · Results on this phone</h2>
-    <table><thead><tr><th>Candidate</th><th>Load</th><th>Update</th><th>Behind</th><th>Match</th></tr></thead><tbody id="res"></tbody></table>
+    <table><thead><tr><th>Candidate</th><th>Test</th><th>Update</th><th>Behind</th><th>Words right</th></tr></thead><tbody id="res"></tbody></table>
     <div class="row">
       <button id="copy">Copy results</button>
       <button class="ghost" id="reset">Clear results</button>
     </div>
-    <p class="note">Lower <b>Behind</b> is what makes it feel instant. Match below ~97% means that candidate gets letters wrong on this phone.</p>
+    <p class="note">Every benchmark reciter recites correctly, so <b>words right</b> should be near 100%: each word marked as a mistake there is a false alarm. Lower <b>behind</b> is what makes it feel instant.</p>
   </section>
 </main>
+<script src="match.js"></script>
 <script src="lab.js"></script>
 </body>
 </html>

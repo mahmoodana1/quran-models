@@ -16,7 +16,7 @@ const BASE = new URL('../', location.href).href; // the repo root
 const WIN = 2.5, RIGHT = 0.5, MIN_NEW = 0.25, RATE = 16000;
 const now = () => performance.timeOrigin + performance.now(); // same clock as the page
 
-let ort, fe, vocab, session;
+let ort, fe, vocab, session, fromCache = false;
 // the ring: meta[0] = samples written so far, time[0] = when the last ones came in
 let ring = new Float32Array(RATE * 30), meta = new Int32Array(1), time = new Float64Array(1);
 let base = 0;                                      // samples written before this recitation
@@ -29,10 +29,12 @@ async function fetchParts(variant) {
   const cache = await caches.open('muaalem-lab');
   const out = new Uint8Array(v.bytes);
   let at = 0, loaded = 0;
+  fromCache = true;
   for (const p of v.parts) {
     const url = BASE + p.path + '?h=' + p.sha256.slice(0, 12);
     let res = await cache.match(url);
     if (!res) {
+      fromCache = false;
       const net = await fetch(url);
       if (!net.ok) throw new Error(`${p.path}: HTTP ${net.status}`);
       const reader = net.body.getReader(), chunks = [];
@@ -41,7 +43,7 @@ async function fetchParts(variant) {
         const { done, value } = await reader.read();
         if (done) break;
         chunks.push(value); got += value.length;
-        postMessage({ type: 'progress', loaded: loaded + got, total: v.bytes });
+        postMessage({ type: 'progress', loaded: loaded + got, total: v.bytes, net: true });
       }
       const blob = new Blob(chunks);
       await cache.put(url, new Response(blob));
@@ -68,7 +70,7 @@ async function load({ variant, ep, threads, shared }) {
   const t1 = performance.now();
   session = await ort.InferenceSession.create(bytes, { executionProviders: [ep], graphOptimizationLevel: 'all' });
   await ids(new Float32Array(RATE * WIN)); // warm up (shader compilation on the GPU)
-  postMessage({ type: 'ready', loadMs: performance.now() - t1, totalMs: performance.now() - t0, ep, threads: ort.env.wasm.numThreads });
+  postMessage({ type: 'ready', fromCache, loadMs: performance.now() - t1, totalMs: performance.now() - t0, ep, threads: ort.env.wasm.numThreads });
 }
 
 async function ids(x) {
