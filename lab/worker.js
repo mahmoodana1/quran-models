@@ -8,7 +8,7 @@
 // without isolation it falls back to messages.
 //
 // in:  load {variant, ep, threads, shared: {ring, meta, time}} · start · audio {samples} · flush
-// out: progress {loaded, total} · ready {loadMs, ep, threads} · text {final, tent, ms, lag} · flushed · error {message}
+// out: progress {loaded, total} · ready {loadMs, ep, threads} · text {final, tent, conf (per character), ms, lag} · flushed · error {message}
 
 const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/';
 const TJS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5';
@@ -16,13 +16,14 @@ const BASE = new URL('../', location.href).href; // the repo root
 const WIN = 2.5, RIGHT = 0.5, MIN_NEW = 0.25, RATE = 16000;
 const FRAME = 640;   // samples per output frame (40 ms); windows start on this grid so frames line up
 const MIN_WIN = 1.5; // s heard before anything is final (the very start needs context)
+const MAX_WIN = 8;   // s: the longest window read when catching up
 const now = () => performance.timeOrigin + performance.now(); // same clock as the page
 
 let ort, fe, vocab, session, fromCache = false;
 // the ring: meta[0] = samples written so far, time[0] = when the last ones came in
 let ring = new Float32Array(RATE * 30), meta = new Int32Array(1), time = new Float64Array(1);
 let base = 0;                                      // samples written before this recitation
-let kept = [], readUpTo = 0;                        // final frames (by absolute frame number), and up to when (s)
+let kept = [], keptP = [], readUpTo = 0;            // final frames (by absolute frame number), how sure each was, and up to when (s)
 let live = false, looping = null;
 
 async function fetchParts(variant) {
@@ -75,22 +76,33 @@ async function load({ variant, ep, threads, shared }) {
   postMessage({ type: 'ready', fromCache, loadMs: performance.now() - t1, totalMs: performance.now() - t0, ep, threads: ort.env.wasm.numThreads });
 }
 
+// the most likely sound of each frame, and how sure the model was of it (softmax)
 async function ids(x) {
   const f = (await fe(x)).input_features;
   const lg = (await session.run({ input_features: new ort.Tensor('float32', f.data, f.dims) })).logits;
-  const d = await lg.getData(), [, T, V] = lg.dims, o = new Int32Array(T);
+  const d = await lg.getData(), [, T, V] = lg.dims, o = new Int32Array(T), p = new Float32Array(T);
   for (let t = 0; t < T; t++) {
     let b = 0;
     for (let v = 1; v < V; v++) if (d[t * V + v] > d[t * V + b]) b = v;
-    o[t] = b;
+    let z = 0;
+    for (let v = 0; v < V; v++) z += Math.exp(d[t * V + v] - d[t * V + b]);
+    o[t] = b; p[t] = 1 / z;
   }
+  o.p = p;
   return o;
 }
 
-function decode(list) {
+// frames -> text, with each character's confidence (the surest of its frames)
+function decode(list, probs) {
   let out = '', prev = -1;
-  for (const b of list) { if (b !== prev && b !== 0) out += vocab[b]; prev = b; }
-  return out;
+  const conf = [];
+  for (let k = 0; k < list.length; k++) {
+    const b = list[k];
+    if (b !== prev && b !== 0) { out += vocab[b]; conf.push(probs[k]); }
+    else if (b === prev && b !== 0) conf[conf.length - 1] = Math.max(conf[conf.length - 1], probs[k]);
+    prev = b;
+  }
+  return { out, conf };
 }
 
 const written = () => Atomics.load(meta, 0);
@@ -105,25 +117,33 @@ function slice(from, to) {
 // read the newest window; final reads to the very end (the reader stopped)
 async function step(final) {
   const n = written() - base, heardAt = time[0];
-  const st = Math.max(0, Math.floor((n - WIN * RATE) / FRAME) * FRAME), f0 = st / FRAME;
+  // the last WIN s; but when reading fell behind (a slow or busy device), from
+  // just before the last final frame, so no stretch of the recitation goes unread
+  let st = Math.max(0, Math.floor((n - WIN * RATE) / FRAME) * FRAME);
+  const behind = Math.max(0, (kept.length - Math.round(0.5 * RATE / FRAME)) * FRAME);
+  if (behind < st) st = Math.max(behind, Math.floor((n - MAX_WIN * RATE) / FRAME) * FRAME);
+  const f0 = st / FRAME;
   const t0 = performance.now();
   const o = await ids(slice(st, n));
   const ms = performance.now() - t0;
   const upto = final ? o.length : n - st < MIN_WIN * RATE ? 0 : Math.max(0, o.length - Math.round(RIGHT * RATE / FRAME));
-  for (let k = kept.length - f0; k < upto; k++) if (k >= 0) kept[f0 + k] = o[k];
+  for (let k = kept.length - f0; k < upto; k++) if (k >= 0) { kept[f0 + k] = o[k]; keptP[f0 + k] = o.p[k]; }
   // frames before f0 that were never made final (can't happen once WIN > RIGHT) stay blank
-  for (let k = 0; k < kept.length; k++) kept[k] ??= 0;
-  const tent = final ? [] : Array.from(o.subarray(Math.max(0, kept.length - f0)));
+  for (let k = 0; k < kept.length; k++) { kept[k] ??= 0; keptP[k] ??= 1; }
+  const from = Math.max(0, kept.length - f0);
+  const tent = final ? [] : Array.from(o.subarray(from)), tentP = final ? [] : Array.from(o.p.subarray(from));
   readUpTo = n / RATE;
   // lag: from when the newest sample read came in, to its letters being out
-  const fin = decode(kept), all = decode(kept.concat(tent)); // together, so a letter on the seam isn't doubled
-  postMessage({ type: 'text', final: fin, tent: all.slice(fin.length), ms, lag: now() - heardAt, end: n / RATE });
+  const fin = decode(kept, keptP).out, all = decode(kept.concat(tent), keptP.concat(tentP)); // together, so a letter on the seam isn't doubled
+  postMessage({ type: 'text', final: fin, tent: all.out.slice(fin.length), conf: all.conf, ms, lag: now() - heardAt, end: n / RATE });
 }
 
 // keep reading while the recitation goes on
 async function loop() {
   while (live) {
-    if ((written() - base) / RATE - readUpTo >= MIN_NEW) await step(false);
+    if ((written() - base) / RATE - readUpTo >= MIN_NEW) {
+      try { await step(false); } catch (e) { postMessage({ type: 'error', message: String(e.stack || e) }); await new Promise(r => setTimeout(r, 200)); }
+    }
     else await new Promise(r => setTimeout(r, 15));
   }
 }
@@ -161,7 +181,7 @@ onmessage = async ({ data }) => {
     if (data.type === 'load') await load(data);
     if (data.type === 'start') {
       live = false; await looping;
-      base = written(); kept = []; readUpTo = 0;
+      base = written(); kept = []; keptP = []; readUpTo = 0;
       live = true; looping = loop();
     }
     if (data.type === 'audio') { // no shared memory: the page sends the samples

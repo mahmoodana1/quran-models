@@ -22,7 +22,7 @@ const Match = (() => {
   const MARK = new Set(['ڇ', 'ۜ', 'ؙ', '۪', 'ٲ', 'ـ', '۾']);
   const GROUPS = ['منں۾', 'تط', 'دض', 'سصث', 'ذزظ', 'قك', 'ءع', 'هح', 'يۦ', 'وۥ', 'اء'];
   // and single pairs (letters the model hears as each other, across reciters)
-  const PAIRS = ['تث', 'بم'];
+  const PAIRS = ['تث', 'بم', 'خق', 'غر'];
   const alike = new Set();
   for (const g of GROUPS.concat(PAIRS)) for (const a of g) for (const b of g) if (a !== b) alike.add(a + b);
 
@@ -89,16 +89,31 @@ const Match = (() => {
   const SHADDA = 0.3; // a doubled letter said single, or a single one said doubled: not reported
   const PAUSE = 0.25; // what a pause between words changes: not reported
   const LEAD = 0.3;   // each sound heard before the aya begins, with opt.freeLead (less than a wrong letter)
+  const UNSURE = 0.6; // below this confidence, a heard sound is not trusted to show a mistake
 
   // expected: { ph, spans: [[start, end) per word] } in script characters,
 // and which words start with hamzat al-wasl: wasl (indices) or words (text)
   // heard: the model's text so far; finalLen: how much of it is final;
   // done: the reciter stopped, so the whole aya must be accounted for
   // opt.freeLead: what was heard before the aya (a basmala, an isti'adha) costs nothing
+  // opt.conf: how sure the model was of each heard character (0..1); a mismatch
+  // on a sound it was unsure of is taken for a mishearing, never a mistake
   // returns per word { state: 'ok'|'err'|'hear'|'todo', type, heard, at }
   function words(expected, heard, finalLen = heard.length, done = false, opt = {}) {
     if (!expected._u) prepare(expected);
     const E = expected._u, edge = expected._edge, H = units(heard);
+    // each heard unit's confidence (a run of one madd char: its surest)
+    let Hc = null;
+    if (opt.conf) {
+      Hc = new Float32Array(H.length);
+      let u = -1, prev = null, k = 0;
+      for (const c of heard) {
+        if (!(MADD.has(c) && c === prev)) u++;
+        Hc[u] = Math.max(Hc[u], opt.conf[k] ?? 1);
+        prev = c; k++;
+      }
+    }
+    const unsure = i => Hc !== null && Hc[i] < UNSURE;
     const hFinal = units(heard.slice(0, finalLen)).length;
     grow();
     const n = H.length, m = E.length, W = m + 1;
@@ -120,10 +135,10 @@ const Match = (() => {
     for (let j = 1; j <= m; j++) { cost[j] = cost[j - 1] + dcost[j - 1]; back[j] = 2; }
     for (let i = 1; i <= n; i++) {
       const r = i * W, p = r - W, h = H[i - 1];
-      const ic = LET[h] && i > 1 && H[i - 2] === h ? SHADDA : INSC[h];
+      const ic = LET[h] && i > 1 && H[i - 2] === h ? SHADDA : unsure(i - 1) ? Math.min(INSC[h], SHADDA) : INSC[h];
       cost[r] = cost[p] + (opt.freeLead ? LEAD : ic); back[r] = 3;
       for (let j = 1; j <= m; j++) {
-        let c = cost[p + j - 1] + subc(j - 1, h), b = 1;
+        let c = cost[p + j - 1] + (unsure(i - 1) ? Math.min(subc(j - 1, h), 0.2) : subc(j - 1, h)), b = 1;
         const d = cost[r + j - 1] + dcost[j - 1];
         if (d < c) { c = d; b = 2; }
         const s = cost[p + j] + insc(j, h, ic);
@@ -141,8 +156,8 @@ const Match = (() => {
       const b = back[i * W + j];
       if (b === 1) {
         const x = E[j - 1] * K + H[i - 1];
-        if (SUBT[x] && subc(j - 1, H[i - 1]) === SUBC[x]) { bad[j - 1] += SUBC[x]; type[j - 1] ||= SUBT[x]; }
-        hit[j - 1] = subc(j - 1, H[i - 1]) <= PAUSE ? 1 : 0;
+        if (SUBT[x] && subc(j - 1, H[i - 1]) === SUBC[x] && !unsure(i - 1)) { bad[j - 1] += SUBC[x]; type[j - 1] ||= SUBT[x]; }
+        hit[j - 1] = subc(j - 1, H[i - 1]) <= PAUSE || unsure(i - 1) ? 1 : 0;
         got[j - 1] = CH[H[i - 1]]; fin[j - 1] = i <= hFinal; pos[j - 1] = i - 1; i--; j--;
       } else if (b === 2) {
         if (dbad[j - 1]) { bad[j - 1] += DELC[E[j - 1]]; type[j - 1] ||= DELT[E[j - 1]]; }
@@ -152,7 +167,7 @@ const Match = (() => {
         const paused = h === HAMZA && j < m && edge[j] === 2;
         const eh = endHar(j, h);
         if (eh >= 0) { bad[eh] += 1; type[eh] ||= 1; }
-        else if (INST[h] && !doubled && !paused && j > 0 && j < m) { bad[j] += INSC[h]; type[j] ||= INST[h]; }
+        else if (INST[h] && !doubled && !paused && !unsure(i - 1) && j > 0 && j < m) { bad[j] += INSC[h]; type[j] ||= INST[h]; }
         i--;
       }
     }
@@ -202,6 +217,19 @@ const Match = (() => {
     });
   }
 
-  return { words, units, text: u => u.map(i => CH[i]).join('') };
+  // each unit's confidence, from each character's (as units() groups them)
+  function unitConf(s, conf) {
+    const out = [];
+    let prev = null, k = 0;
+    for (const c of s) {
+      const v = conf?.[k++] ?? 1;
+      if (MADD.has(c) && c === prev) out[out.length - 1] = Math.max(out[out.length - 1], v);
+      else out.push(v);
+      prev = c;
+    }
+    return out;
+  }
+
+  return { words, units, unitConf, text: u => u.map(i => CH[i]).join('') };
 })();
 if (typeof module !== 'undefined') module.exports = Match;
