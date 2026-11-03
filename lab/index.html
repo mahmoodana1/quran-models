@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Muaalem Phone Lab</title>
+<meta name="color-scheme" content="light dark">
+<style>
+:root { --bg: #f6f4ef; --card: #fff; --ink: #1d1d1b; --mute: #6d6a63; --line: #e4e0d6; --acc: #2f6f5e; --acc2: #e8f1ee; --warn: #b4542d; --tent: #9a968c; }
+@media (prefers-color-scheme: dark) { :root { --bg: #151614; --card: #1f201d; --ink: #ecebe6; --mute: #9b988f; --line: #33342f; --acc: #6cc0a5; --acc2: #22322d; --warn: #e48a62; --tent: #77746c; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 640px; margin: 0 auto; padding: 16px 16px 48px; }
+h1 { font-size: 20px; margin: 4px 0 2px; }
+.sub { color: var(--mute); margin: 0 0 14px; font-size: 13px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin: 12px 0; }
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--mute); margin: 0 0 10px; }
+.dev { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 13px; }
+.dev b { font-weight: 500; color: var(--mute); }
+.cands { display: grid; gap: 8px; }
+.cand { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.cand input { accent-color: var(--acc); }
+.cand .n { font-weight: 600; }
+.cand .m { color: var(--mute); font-size: 12px; }
+.cand.off { opacity: .45; cursor: not-allowed; }
+.cand:has(input:checked) { border-color: var(--acc); background: var(--acc2); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+button { font: inherit; border: 0; border-radius: 10px; padding: 10px 14px; background: var(--acc); color: #fff; font-weight: 600; cursor: pointer; }
+button.ghost { background: transparent; color: var(--acc); border: 1px solid var(--acc); }
+button:disabled { opacity: .45; cursor: default; }
+button.rec { background: var(--warn); }
+select { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 10px; }
+.bar i { display: block; height: 100%; width: 0; background: var(--acc); transition: width .2s; }
+.status { color: var(--mute); font-size: 13px; margin-top: 8px; min-height: 1.4em; }
+.status.err { color: var(--warn); }
+.out { direction: rtl; text-align: right; font-size: 26px; line-height: 1.9; min-height: 3.6em; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); word-break: break-all; font-family: "Amiri", "Noto Naskh Arabic", "Scheherazade New", serif; }
+.out .t { color: var(--tent); }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.stat { background: var(--bg); border-radius: 10px; padding: 8px 10px; }
+.stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 11px; color: var(--mute); }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+th { color: var(--mute); font-weight: 500; }
+td.best { color: var(--acc); font-weight: 700; }
+.note { font-size: 12.5px; color: var(--mute); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Muaalem Phone Lab</h1>
+  <p class="sub">Try each model candidate on this phone: how fast it writes what you recite, with harakat.</p>
+
+  <section class="card">
+    <h2>This device</h2>
+    <div class="dev" id="dev"></div>
+  </section>
+
+  <section class="card">
+    <h2>1 · Pick a candidate</h2>
+    <div class="cands" id="cands"></div>
+    <div class="row">
+      <label class="note">CPU threads <select id="threads"></select></label>
+      <button id="load">Load</button>
+      <button class="ghost" id="clear">Delete downloads</button>
+    </div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="status" id="lstatus">Not loaded.</div>
+  </section>
+
+  <section class="card">
+    <h2>2 · Test it</h2>
+    <div class="row" style="margin-top:0">
+      <button id="bench" disabled>Benchmark (Husary)</button>
+      <button class="rec" id="mic" disabled>Recite live</button>
+    </div>
+    <p class="note">Benchmark plays al-Mulk 1 and al-Fatiha 2 through the model in real time (nothing is played aloud). Recite live uses your microphone; grey letters are still being decided.</p>
+    <div class="out" id="out"></div>
+    <div class="stats">
+      <div class="stat"><b id="sMs">–</b><span>ms per update</span></div>
+      <div class="stat"><b id="sLag">–</b><span>ms behind your voice</span></div>
+      <div class="stat"><b id="sAcc">–</b><span>match with reference</span></div>
+    </div>
+    <div class="status" id="tstatus"></div>
+  </section>
+
+  <section class="card">
+    <h2>3 · Results on this phone</h2>
+    <table><thead><tr><th>Candidate</th><th>Load</th><th>Update</th><th>Behind</th><th>Match</th></tr></thead><tbody id="res"></tbody></table>
+    <div class="row">
+      <button id="copy">Copy results</button>
+      <button class="ghost" id="reset">Clear results</button>
+    </div>
+    <p class="note">Lower <b>Behind</b> is what makes it feel instant. Match below ~97% means that candidate gets letters wrong on this phone.</p>
+  </section>
+</main>
+<script src="lab.js"></script>
+</body>
+</html>

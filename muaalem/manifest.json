@@ -1,0 +1,55 @@
+{
+ "model": "sysofwan/hifzguide-muaalem-mini (AGPL-3.0), converted to ONNX",
+ "input": "input_features [1, T, 160] float32 (SeamlessM4T features)",
+ "output": "logits [1, T/2, 43]; id 0 = blank",
+ "variants": {
+  "q8": {
+   "bytes": 126310668,
+   "sha256": "5c1c37bdd4b231aee200521cf6667af3f300e190eff5cbb703149bec8c99e1f9",
+   "parts": [
+    {
+     "path": "muaalem/q8/part0.bin",
+     "bytes": 94371840,
+     "sha256": "75b17ee51b09cddfacec14505146c02e00ee4c81dc57767105b751d3ebff057e"
+    },
+    {
+     "path": "muaalem/q8/part1.bin",
+     "bytes": 31938828,
+     "sha256": "2cb9b3642af7a626222b14dc6c1732d69623d45f502b61a1ffc0f47c1a6ed232"
+    }
+   ]
+  },
+  "q4": {
+   "bytes": 85657506,
+   "sha256": "76f1774db6d58da2aa58a05d75ef08af2b4d51d88931b902d11143cd0191d89b",
+   "parts": [
+    {
+     "path": "muaalem/q4/part0.bin",
+     "bytes": 85657506,
+     "sha256": "76f1774db6d58da2aa58a05d75ef08af2b4d51d88931b902d11143cd0191d89b"
+    }
+   ]
+  },
+  "fp16": {
+   "bytes": 233879004,
+   "sha256": "0d4c0cb548dc8175e14e506b0d24dcef740d7e509538ac14f71209a9f18469b5",
+   "parts": [
+    {
+     "path": "muaalem/fp16/part0.bin",
+     "bytes": 94371840,
+     "sha256": "a8c2ca384935b7bbf6f435e1ee3069ebb93da3a9540afa3315155944b5a04d3c"
+    },
+    {
+     "path": "muaalem/fp16/part1.bin",
+     "bytes": 94371840,
+     "sha256": "5036bc324e9ea43777b86ae1192dabd93ec1da6ac3a3e72bb3aff7ada710bdd4"
+    },
+    {
+     "path": "muaalem/fp16/part2.bin",
+     "bytes": 45135324,
+     "sha256": "801fcf24a40fcf787c53405ad94b017c636ef2eb9502c385801bdf70aaaed89c"
+    }
+   ]
+  }
+ }
+}
