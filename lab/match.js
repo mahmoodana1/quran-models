@@ -21,8 +21,10 @@ const Match = (() => {
   const MADD = new Set(['ا', 'ۦ', 'ۥ', 'ں']);           // runs of these are one unit
   const MARK = new Set(['ڇ', 'ۜ', 'ؙ', '۪', 'ٲ', 'ـ', '۾']);
   const GROUPS = ['منں۾', 'تط', 'دض', 'سصث', 'ذزظ', 'قك', 'ءع', 'هح', 'يۦ', 'وۥ', 'اء'];
-  const group = new Map();
-  GROUPS.forEach((g, i) => [...g].forEach(c => { if (!group.has(c)) group.set(c, i); }));
+  // and single pairs (letters the model hears as each other, across reciters)
+  const PAIRS = ['تث', 'بم'];
+  const alike = new Set();
+  for (const g of GROUPS.concat(PAIRS)) for (const a of g) for (const b of g) if (a !== b) alike.add(a + b);
 
   const LETTER = 0.6; // one letter wrong; a word is a mistake from a cost of 1
   const kind = c => HARAKA.has(c) ? 'h' : MARK.has(c) ? 'm' : MADD.has(c) ? 'd' : 'l';
@@ -64,8 +66,7 @@ const Match = (() => {
   function sub(a, b) {
     if (a[0] === b[0]) return [0, null];
     if (a[1] === 'm' || b[1] === 'm') return [0.15, null];
-    const ga = group.get(a[0]), gb = group.get(b[0]);
-    if (ga != null && ga === gb) return [0.2, null];
+    if (alike.has(a[0] + b[0])) return [0.2, null];
     if (a[1] === 'h' && b[1] === 'h') return [1, 'haraka'];
     if (a[1] === 'd' && b[1] === 'd') return [0.4, null];
     return a[1] === 'h' ? [1, 'haraka'] : [LETTER, 'letter'];
