@@ -13,9 +13,9 @@
 // A pause between two words (to breathe, or at a stop sign) changes how the
 // words around it sound, and is never a mistake: the last haraka dropped, a
 // tanween said as a long ā or left out, a hamza before the next word's ٱلْ.
-// A wrong haraka is a mistake; a single wrong, missing or extra letter in a
-// word is forgiven (the model mishears some letters even from the best
-// reciters: غ as ر, خ as ق, …), two in the same word are a mistake.
+// A wrong haraka is a mistake. Letters the model mishears (even from the best
+// reciters: غ as ر, خ as ق, …, and more on a phone) are forgiven until the word
+// is clearly another: fewer than half its letters heard, or four off.
 const Match = (() => {
   const HARAKA = new Set(['َ', 'ُ', 'ِ']);
   const MADD = new Set(['ا', 'ۦ', 'ۥ', 'ں']);           // runs of these are one unit
@@ -158,10 +158,20 @@ const Match = (() => {
     }
     return expected._w.map(([a, b]) => {
       if (a >= end) return { state: 'todo' };
-      let sum = 0, t = 0, heardTxt = '', decided = true, hits = 0;
-      for (let k = a; k < Math.min(b, end); k++) { sum += bad[k]; t ||= type[k]; heardTxt += got[k]; decided &&= !!fin[k]; hits += hit[k]; }
-      // most of the word not heard at all: it was left out, however forgivable each sound is
-      if (b <= end && b > a && hits * 2 < b - a) { sum = Math.max(sum, 1); t = 3; }
+      // haraka mistakes and letter mistakes are weighed apart: a haraka said wrong
+      // is a mistake; letters only make a different word when fewer than half
+      // of the word's letters were heard, or four were off (two or three
+      // misheard letters are common on a phone's microphone)
+      let har = 0, letc = 0, tl = 0, heardTxt = '', decided = true, hits = 0, lets = 0, lhits = 0;
+      for (let k = a; k < Math.min(b, end); k++) {
+        if (type[k] === 1) har += bad[k]; else { letc += bad[k]; tl ||= type[k]; }
+        heardTxt += got[k]; decided &&= !!fin[k]; hits += hit[k];
+        if (LET[E[k]]) { lets++; lhits += hit[k]; }
+      }
+      let sum = 0, t = 0;
+      if (b <= end && b > a && hits * 3 < b - a) { sum = 1; t = 3; } // most of the word not heard at all: left out
+      else if (letc >= 1.2 && (lhits < lets * 0.5 || letc >= 2.4)) { sum = letc; t = tl || 2; }
+      else if (har >= 1) { sum = har; t = 1; }
       const at = [pos[a], Math.min(b, end) > a ? pos[Math.min(b, end) - 1] + 1 : pos[a]]; // where in the heard units
       if (b > end) return { state: 'hear', heard: heardTxt, at };
       if (sum >= 1) return { state: decided ? 'err' : 'hear', type: TYPES[t], heard: heardTxt, at };
