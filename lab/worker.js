@@ -14,13 +14,15 @@ const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/';
 const TJS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5';
 const BASE = new URL('../', location.href).href; // the repo root
 const WIN = 2.5, RIGHT = 0.5, MIN_NEW = 0.25, RATE = 16000;
+const FRAME = 640;   // samples per output frame (40 ms); windows start on this grid so frames line up
+const MIN_WIN = 1.5; // s heard before anything is final (the very start needs context)
 const now = () => performance.timeOrigin + performance.now(); // same clock as the page
 
 let ort, fe, vocab, session, fromCache = false;
 // the ring: meta[0] = samples written so far, time[0] = when the last ones came in
 let ring = new Float32Array(RATE * 30), meta = new Int32Array(1), time = new Float64Array(1);
 let base = 0;                                      // samples written before this recitation
-let kept = [], keptUntil = 0, readUpTo = 0;        // frames made final, and up to when (s)
+let kept = [], readUpTo = 0;                        // final frames (by absolute frame number), and up to when (s)
 let live = false, looping = null;
 
 async function fetchParts(variant) {
@@ -103,20 +105,19 @@ function slice(from, to) {
 // read the newest window; final reads to the very end (the reader stopped)
 async function step(final) {
   const n = written() - base, heardAt = time[0];
-  const end = n / RATE, start = Math.max(0, end - WIN);
+  const st = Math.max(0, Math.floor((n - WIN * RATE) / FRAME) * FRAME), f0 = st / FRAME;
   const t0 = performance.now();
-  const o = await ids(slice(Math.floor(start * RATE), n));
+  const o = await ids(slice(st, n));
   const ms = performance.now() - t0;
-  const upto = final ? end : end - RIGHT, tent = [];
-  for (let k = 0; k < o.length; k++) {
-    const at = start + k * (end - start) / o.length;
-    if (at >= keptUntil && at < upto) kept.push(o[k]);
-    else if (at >= Math.max(keptUntil, upto)) tent.push(o[k]);
-  }
-  keptUntil = Math.max(keptUntil, upto);
-  readUpTo = end;
+  const upto = final ? o.length : n - st < MIN_WIN * RATE ? 0 : Math.max(0, o.length - Math.round(RIGHT * RATE / FRAME));
+  for (let k = kept.length - f0; k < upto; k++) if (k >= 0) kept[f0 + k] = o[k];
+  // frames before f0 that were never made final (can't happen once WIN > RIGHT) stay blank
+  for (let k = 0; k < kept.length; k++) kept[k] ??= 0;
+  const tent = final ? [] : Array.from(o.subarray(Math.max(0, kept.length - f0)));
+  readUpTo = n / RATE;
   // lag: from when the newest sample read came in, to its letters being out
-  postMessage({ type: 'text', final: decode(kept), tent: final ? '' : decode(tent), ms, lag: now() - heardAt, end });
+  const fin = decode(kept), all = decode(kept.concat(tent)); // together, so a letter on the seam isn't doubled
+  postMessage({ type: 'text', final: fin, tent: all.slice(fin.length), ms, lag: now() - heardAt, end: n / RATE });
 }
 
 // keep reading while the recitation goes on
@@ -132,7 +133,7 @@ onmessage = async ({ data }) => {
     if (data.type === 'load') await load(data);
     if (data.type === 'start') {
       live = false; await looping;
-      base = written(); kept = []; keptUntil = 0; readUpTo = 0;
+      base = written(); kept = []; readUpTo = 0;
       live = true; looping = loop();
     }
     if (data.type === 'audio') { // no shared memory: the page sends the samples

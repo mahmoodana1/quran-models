@@ -10,7 +10,9 @@
 //   - sounds it confuses (م/ن/ں, ت/ط, د/ض, س/ص/ث, ذ/ز/ظ, ق/ك, ء/ع, ه/ح, …)
 //   - madd length (ا ۦ ۥ said 2, 4 or 6 counts), ghunna length (ں)
 //   - small marks (qalqala ڇ, sakt ۜ, …)
-// A wrong haraka, a wrong letter, or a missing letter is a real mistake.
+// A wrong haraka is a mistake; a single wrong, missing or extra letter in a
+// word is forgiven (the model mishears some letters even from the best
+// reciters: غ as ر, خ as ق, …), two in the same word are a mistake.
 const Match = (() => {
   const HARAKA = new Set(['َ', 'ُ', 'ِ']);
   const MADD = new Set(['ا', 'ۦ', 'ۥ', 'ں']);           // runs of these are one unit
@@ -19,6 +21,7 @@ const Match = (() => {
   const group = new Map();
   GROUPS.forEach((g, i) => [...g].forEach(c => { if (!group.has(c)) group.set(c, i); }));
 
+  const LETTER = 0.6; // one letter wrong; a word is a mistake from a cost of 1
   const kind = c => HARAKA.has(c) ? 'h' : MARK.has(c) ? 'm' : MADD.has(c) ? 'd' : 'l';
 
   // the script as unit ids; a run of one madd char is one unit
@@ -60,7 +63,7 @@ const Match = (() => {
     if (ga != null && ga === gb) return [0.2, null];
     if (a[1] === 'h' && b[1] === 'h') return [1, 'haraka'];
     if (a[1] === 'd' && b[1] === 'd') return [0.4, null];
-    return [1, a[1] === 'h' ? 'haraka' : 'letter'];
+    return a[1] === 'h' ? [1, 'haraka'] : [LETTER, 'letter'];
   }
   // expected unit not heard
   function del(a) {
@@ -68,14 +71,14 @@ const Match = (() => {
     if (a[1] === 'd') return [0.5, null];     // madd said very short: tajweed, not a word mistake
     if (a[1] === 'h') return [0.8, 'haraka'];
     if (a[0] === 'ه') return [0.6, null];     // a soft ha the model often drops
-    return [1, 'missing'];
+    return [LETTER, 'missing'];
   }
   // heard unit not expected
   function ins(b) {
     if (b[1] === 'm') return [0.1, null];
     if (b[1] === 'd') return [0.4, null];
     if (b[1] === 'h') return [0.7, null];
-    return [1, 'extra'];
+    return [LETTER, 'extra'];
   }
   const SHADDA = 0.3; // a doubled letter said single, or a single one said doubled: not reported
 
@@ -109,17 +112,17 @@ const Match = (() => {
     let end = m;
     if (!done) { end = 0; for (let j = 1, r = n * W; j <= m; j++) if (cost[r + j] < cost[r + end] - 1e-6) end = j; }
     // walk back: what happened to each expected unit
-    const bad = new Float32Array(m + 1), type = new Uint8Array(m + 1), got = new Array(m).fill(''), fin = new Uint8Array(m);
+    const bad = new Float32Array(m + 1), type = new Uint8Array(m + 1), got = new Array(m).fill(''), fin = new Uint8Array(m), pos = new Int32Array(m).fill(-1);
     let i = n, j = end;
     while (i > 0 || j > 0) {
       const b = back[i * W + j];
       if (b === 1) {
         const x = E[j - 1] * K + H[i - 1];
         if (SUBT[x]) { bad[j - 1] += SUBC[x]; type[j - 1] ||= SUBT[x]; }
-        got[j - 1] = CH[H[i - 1]]; fin[j - 1] = i <= hFinal; i--; j--;
+        got[j - 1] = CH[H[i - 1]]; fin[j - 1] = i <= hFinal; pos[j - 1] = i - 1; i--; j--;
       } else if (b === 2) {
         if (DELT[E[j - 1]] && dcost[j - 1] !== SHADDA) { bad[j - 1] += DELC[E[j - 1]]; type[j - 1] ||= DELT[E[j - 1]]; }
-        fin[j - 1] = i <= hFinal; j--;
+        fin[j - 1] = i <= hFinal; pos[j - 1] = i; j--;
       } else {
         const h = H[i - 1], doubled = LET[h] && ((i > 1 && H[i - 2] === h) || (j > 0 && E[j - 1] === h));
         if (INST[h] && !doubled && j > 0 && j < m) { bad[j] += INSC[h]; type[j] ||= INST[h]; }
@@ -130,9 +133,10 @@ const Match = (() => {
       if (a >= end) return { state: 'todo' };
       let sum = 0, t = 0, heardTxt = '', decided = true;
       for (let k = a; k < Math.min(b, end); k++) { sum += bad[k]; t ||= type[k]; heardTxt += got[k]; decided &&= !!fin[k]; }
-      if (b > end) return { state: 'hear', heard: heardTxt };
-      if (sum >= 1) return { state: decided ? 'err' : 'hear', type: TYPES[t], heard: heardTxt };
-      return { state: decided ? 'ok' : 'hear', heard: heardTxt };
+      const at = [pos[a], Math.min(b, end) > a ? pos[Math.min(b, end) - 1] + 1 : pos[a]]; // where in the heard units
+      if (b > end) return { state: 'hear', heard: heardTxt, at };
+      if (sum >= 1) return { state: decided ? 'err' : 'hear', type: TYPES[t], heard: heardTxt, at };
+      return { state: decided ? 'ok' : 'hear', heard: heardTxt, at };
     });
   }
 
@@ -151,6 +155,6 @@ const Match = (() => {
     ex._w = ex.spans.map(([a, b]) => [at[a], b > a ? Math.max(at[a] + 1, at[b]) : at[a]]);
   }
 
-  return { words, units };
+  return { words, units, text: u => u.map(i => CH[i]).join('') };
 })();
 if (typeof module !== 'undefined') module.exports = Match;
