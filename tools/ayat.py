@@ -2,8 +2,9 @@
 # (Hafs, quran-transcript) of each word, as [start, end) in the aya's script
 import json, sys
 import quran_transcript as qt
-AYAT = [(1, 2), (1, 5), (1, 6), (1, 7), (112, 1), (112, 2), (112, 3), (112, 4), (103, 1), (103, 2), (103, 3),
-        (67, 1), (67, 2), (67, 3), (55, 1), (55, 2), (55, 3), (55, 4), (2, 255)]
+# whole runs of ayat, so live recitation can move from one aya to the next
+RUNS = [(1, 1, 7), (2, 255, 255), (67, 1, 10), (55, 1, 13), (103, 1, 3), (108, 1, 3), (112, 1, 4), (113, 1, 5), (114, 1, 6)]
+AYAT = [(s, a) for s, a0, a1 in RUNS for a in range(a0, a1 + 1)]
 m = qt.MoshafAttributes(rewaya='hafs', madd_monfasel_len=4, madd_mottasel_len=4, madd_mottasel_waqf=4, madd_aared_len=4)
 out = []
 for s, a in AYAT:

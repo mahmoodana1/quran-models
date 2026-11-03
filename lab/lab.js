@@ -17,14 +17,17 @@ const RECITERS = [
   ['Yasser_Ad-Dussary_128kbps', 'Yasser Ad-Dussary'], ['Ghamadi_40kbps', 'Al-Ghamdi'], ['Maher_AlMuaiqly_64kbps', 'Maher Al-Muaiqly'],
   ['Hudhaify_128kbps', 'Al-Hudhaify'], ['Muhammad_Ayyoub_128kbps', 'Muhammad Ayyoub'], ['Abu_Bakr_Ash-Shaatree_128kbps', 'Ash-Shatri'],
 ];
+const run_ = (s, a0, a1) => Array.from({ length: a1 - a0 + 1 }, (_, i) => [s, a0 + i]);
 const SETS = [
   ['quick', 'Quick · 6 ayat', [[1, 2], [1, 7], [112, 1], [103, 2], [67, 1], [55, 3]]],
-  ['all', 'All 19 ayat (incl. Ayat al-Kursi)', null],
-  ['short', 'Short surahs · 7 ayat', [[112, 1], [112, 2], [112, 3], [112, 4], [103, 1], [103, 2], [103, 3]]],
-  ['mulk', 'Al-Mulk 1–3 + Ar-Rahman 1–4', [[67, 1], [67, 2], [67, 3], [55, 1], [55, 2], [55, 3], [55, 4]]],
+  ['fatiha', 'Al-Fatiha · 7 ayat', run_(1, 1, 7)],
+  ['short', 'Short surahs · 21 ayat', [...run_(103, 1, 3), ...run_(108, 1, 3), ...run_(112, 1, 4), ...run_(113, 1, 5), ...run_(114, 1, 6)]],
+  ['mulk', 'Al-Mulk 1–10', run_(67, 1, 10)],
+  ['rahman', 'Ar-Rahman 1–13', run_(55, 1, 13)],
   ['kursi', 'Ayat al-Kursi', [[2, 255]]],
+  ['all', 'Everything · 52 ayat', null],
 ];
-const RATE = 16000, CHUNK = 1024;
+const RATE = 16000;
 const $ = s => document.querySelector(s);
 const ar = n => String(n).replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[d]);
 const store = {
@@ -73,6 +76,7 @@ async function device() {
   $('#reciter').innerHTML = RECITERS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('') + '<option value="*">All 12 reciters</option>';
   $('#set').innerHTML = SETS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('');
   $('#liveAya').innerHTML = AYAT.map((x, i) => `<option value="${i}">${x.name} ${x.a}</option>`).join('');
+  if (!SETS.some(x => x[0] === store.get('lab.set', 'quick'))) store.set('lab.set', 'quick');
   $('#reciter').value = store.get('lab.reciter', 'Husary_64kbps');
   $('#set').value = store.get('lab.set', 'quick');
   $('#sound').checked = store.get('lab.sound', true);
@@ -89,23 +93,6 @@ function newRing() {
   if (!self.crossOriginIsolated || typeof SharedArrayBuffer === 'undefined') return null;
   return { ring: new Float32Array(new SharedArrayBuffer(4 * RATE * 30)), meta: new Int32Array(new SharedArrayBuffer(4)), time: new Float64Array(new SharedArrayBuffer(8)) };
 }
-// hand samples (16 kHz) to the worker
-function push(y) {
-  if (!shared) { worker.postMessage({ type: 'audio', samples: y, at: now() }); return; }
-  const { ring, meta, time } = shared, w = Atomics.load(meta, 0), R = ring.length;
-  for (let i = 0; i < y.length; i++) ring[(w + i) % R] = y[i];
-  time[0] = now();
-  Atomics.store(meta, 0, w + y.length);
-}
-// a ScriptProcessor's block, copied and brought to 16 kHz
-function to16k(x, rate) {
-  const step = rate / RATE;
-  if (step === 1) return new Float32Array(x);
-  const y = new Float32Array(Math.floor(x.length / step));
-  for (let i = 0; i < y.length; i++) { const p = i * step, k = Math.floor(p), f = p - k; y[i] = x[k] * (1 - f) + (x[k + 1] ?? x[k]) * f; }
-  return y;
-}
-
 // ---- loading a candidate
 let worker = null, cur = null, ready = false, loadMs = 0;
 function load() {
@@ -156,17 +143,38 @@ function showAya(aya, states, who) {
 const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
 const avg = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
 
+// ---- sound: one AudioContext, made on the first tap (phones only allow
+// starting sound from a tap) and kept; capture runs on the audio thread
+let actx = null, tapReady = null;
+function sound() {
+  if (!actx) {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    tapReady = actx.audioWorklet.addModule('capture.js');
+  }
+  actx.resume();
+  return tapReady;
+}
+// a node that hands whatever is connected to it to the model
+function tap() {
+  const clock0 = now() - actx.currentTime * 1000;
+  const node = new AudioWorkletNode(actx, 'tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], processorOptions: { shared, clock0 } });
+  if (!shared) node.port.onmessage = e => worker.postMessage({ type: 'audio', samples: e.data.samples, at: e.data.at });
+  node.connect(actx.destination); // silent: it writes nothing to its output
+  return node;
+}
+const fetchAudio = url => fetch(url).then(r => { if (!r.ok) throw new Error(`${url.split('/').pop()}: HTTP ${r.status}`); return r.arrayBuffer(); }).then(b => actx.decodeAudioData(b));
+
 // ---- live text: model output -> aya words
 let run = null, onFlushed = null;
 function onText(d) {
   if (!run) return;
   run.ms.push(d.ms); run.lag.push(d.lag);
   run.final = d.final; run.tent = d.tent;
-  const states = Match.words(run.aya, d.final + d.tent, d.final.length);
-  showAya(run.aya, states, run.who);
-  $('#sndH').innerHTML = esc(d.final) + `<span class="t">${esc(d.tent)}</span>`;
   $('#sMs').textContent = Math.round(avg(run.ms));
   $('#sLag').textContent = Math.round(avg(run.lag));
+  if (run.seq) follow();
+  else showAya(run.aya, Match.words(run.aya, d.final + d.tent, d.final.length), run.who);
+  $('#sndH').innerHTML = esc(run.final) + `<span class="t">${esc(run.tent)}</span>`;
 }
 const flush = () => new Promise(r => { onFlushed = r; worker.postMessage({ type: 'flush' }); });
 // the aya is over: every word decided
@@ -176,55 +184,85 @@ function verdict() {
   return states;
 }
 
+// ---- following a reciter through consecutive ayat: what was heard is matched
+// against the current aya and the next one together; once the next one has
+// begun, the current one is closed (words never reached count as skipped) and
+// what was heard for it is set aside
+const pairs = new Map();
+function pair(a, b) {
+  const k = `${a.s}:${a.a}`;
+  if (!pairs.has(k)) pairs.set(k, { ph: a.ph + b.ph, words: a.words.concat(b.words), spans: a.spans.concat(b.spans.map(([x, y]) => [x + a.ph.length, y + a.ph.length])) });
+  return pairs.get(k);
+}
+function follow(done) {
+  const U = Match.units(run.final + run.tent), uf = Match.units(run.final).length;
+  for (;;) {
+    const cur = run.seq[run.c], next = done ? null : run.seq[run.c + 1], n0 = cur.words.length;
+    const sub = Match.text(U.slice(run.cut)), fin = Match.text(U.slice(run.cut, Math.max(run.cut, uf))).length;
+    const st = Match.words(next ? pair(cur, next) : cur, sub, fin, !!done);
+    const begun = next && st.slice(n0, n0 + 2).some(x => x.state === 'ok' || x.state === 'err');
+    if (!begun) { showAya(cur, st.slice(0, n0), run.who); return st.slice(0, n0); }
+    closeAya(cur, st.slice(0, n0).map(x => x.state === 'ok' || x.state === 'err' ? x : { state: 'err', type: 'skipped' }));
+    run.cut += st[n0].at[0];
+    run.c++;
+  }
+}
+function closeAya(aya, states) {
+  const ok = states.filter(x => x.state === 'ok').length;
+  run.right += ok; run.words += states.length;
+  const wrong = states.map((x, i) => x.state === 'err' ? aya.words[i] : null).filter(Boolean);
+  $('#log').insertAdjacentHTML('afterbegin', `<div><span class="k">${aya.s}:${aya.a}</span><span>${ok}/${states.length}</span>${wrong.length ? `<span class="bad">${wrong.join(' · ')}</span>` : ''}</div>`);
+  $('#sAcc').textContent = (run.right / run.words * 100).toFixed(0) + '%';
+}
+
 // ---- benchmark: each aya played (aloud, if Sound is on) and fed to the model as it plays
-let stopping = false;
-async function playAndFeed(url, aya, who) {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  try {
-    const buf = await ctx.decodeAudioData(await (await fetch(url)).arrayBuffer());
-    run = { aya, who, ms: run?.ms || [], lag: run?.lag || [], final: '', tent: '' };
-    showAya(aya, null, who);
-    $('#sndH').textContent = '';
-    worker.postMessage({ type: 'start' });
-    const src = ctx.createBufferSource(); src.buffer = buf;
-    const vol = ctx.createGain(); vol.gain.value = $('#sound').checked ? 1 : 0;
-    const node = ctx.createScriptProcessor(4096 >> (ctx.sampleRate > 24000 ? 1 : 2), 1, 1);
-    node.onaudioprocess = e => push(to16k(e.inputBuffer.getChannelData(0), ctx.sampleRate));
-    src.connect(vol).connect(ctx.destination);
-    src.connect(node).connect(ctx.destination);
-    await ctx.resume();
-    await new Promise(r => { src.onended = r; src.start(); stopper = () => { try { src.stop(); } catch {} }; });
-    await new Promise(r => setTimeout(r, 200)); // the processor's last block
-    node.disconnect();
-  } finally { ctx.close(); stopper = null; }
+let stopping = false, stopper = null;
+async function playAndFeed(buf, aya, who) {
+  run = { aya, who, ms: run?.ms || [], lag: run?.lag || [], final: '', tent: '' };
+  showAya(aya, null, who);
+  $('#sndH').textContent = '';
+  worker.postMessage({ type: 'start' });
+  const src = actx.createBufferSource(); src.buffer = buf;
+  const vol = actx.createGain(); vol.gain.value = $('#sound').checked ? 1 : 0;
+  const node = tap();
+  src.connect(vol).connect(actx.destination);
+  src.connect(node);
+  await new Promise(r => { src.onended = r; src.start(); stopper = () => { try { src.stop(); } catch {} }; });
+  stopper = null;
+  await new Promise(r => setTimeout(r, 150)); // the last block through the audio thread
+  node.port.postMessage('stop'); node.disconnect(); src.disconnect(); vol.disconnect();
   await flush();
   return verdict();
 }
-let stopper = null;
 async function bench() {
-  const rec = $('#reciter').value, set = SETS.find(s => s[0] === $('#set').value);
+  const ready = sound(); // inside the tap
+  const rec = $('#reciter').value, set = SETS.find(x => x[0] === $('#set').value);
   store.set('lab.reciter', rec); store.set('lab.set', set[0]); store.set('lab.sound', $('#sound').checked);
   const list = (set[2] || AYAT.map(x => [x.s, x.a])).map(([s, a]) => AYAT.find(x => x.s === s && x.a === a));
   const reciters = rec === '*' ? RECITERS : RECITERS.filter(r => r[0] === rec);
+  const jobs = reciters.flatMap(([folder, who]) => list.map(aya => ({ folder, who, aya })));
+  const pad = n => String(n).padStart(3, '0');
+  const url = j => `https://everyayah.com/data/${j.folder}/${pad(j.aya.s)}${pad(j.aya.a)}.mp3`;
   $('#bench').disabled = $('#mic').disabled = true; $('#stopb').hidden = false; stopping = false;
   $('#log').innerHTML = '';
   run = null;
   let words = 0, right = 0;
   const bad = [];
   try {
-    for (const [folder, who] of reciters) {
-      for (const aya of list) {
-        if (stopping) break;
-        const pad = n => String(n).padStart(3, '0');
-        status('#tstatus', `${who} · ${aya.name} ${aya.a}`);
-        const states = await playAndFeed(`https://everyayah.com/data/${folder}/${pad(aya.s)}${pad(aya.a)}.mp3`, aya, who);
-        const ok = states.filter(s => s.state === 'ok').length;
-        words += states.length; right += ok;
-        const wrong = states.map((s, i) => s.state === 'err' ? aya.words[i] : null).filter(Boolean);
-        wrong.forEach(w => bad.push(`${who}: ${aya.s}:${aya.a} ${w}`));
-        $('#log').insertAdjacentHTML('afterbegin', `<div><span class="k">${who.split(' ').pop()} ${aya.s}:${aya.a}</span><span>${ok}/${states.length}</span>${wrong.length ? `<span class="bad">${wrong.join(' · ')}</span>` : ''}</div>`);
-        $('#sAcc').textContent = (right / words * 100).toFixed(1) + '%';
-      }
+    await ready;
+    let nextBuf = fetchAudio(url(jobs[0]));
+    for (let k = 0; k < jobs.length && !stopping; k++) {
+      const j = jobs[k];
+      status('#tstatus', `${j.who} · ${j.aya.name} ${j.aya.a} (${k + 1}/${jobs.length})`);
+      const buf = await nextBuf;
+      if (k + 1 < jobs.length) nextBuf = fetchAudio(url(jobs[k + 1])); // the next one loads while this one plays
+      const states = await playAndFeed(buf, j.aya, j.who);
+      const ok = states.filter(x => x.state === 'ok').length;
+      words += states.length; right += ok;
+      const wrong = states.map((x, i) => x.state === 'err' ? j.aya.words[i] : null).filter(Boolean);
+      wrong.forEach(w => bad.push(`${j.who}: ${j.aya.s}:${j.aya.a} ${w}`));
+      $('#log').insertAdjacentHTML('afterbegin', `<div><span class="k">${j.who.split(' ').pop()} ${j.aya.s}:${j.aya.a}</span><span>${ok}/${states.length}</span>${wrong.length ? `<span class="bad">${wrong.join(' · ')}</span>` : ''}</div>`);
+      $('#sAcc').textContent = (right / words * 100).toFixed(1) + '%';
     }
     if (words) {
       status('#tstatus', `${stopping ? 'Stopped' : 'Done'}: ${right}/${words} words right. Saved below.`);
@@ -235,37 +273,37 @@ async function bench() {
   $('#bench').disabled = $('#mic').disabled = false; $('#stopb').hidden = true;
 }
 
-// ---- recite live: the chosen aya lights up as you recite it
+// ---- recite live: from the chosen aya on through its surah, aya after aya
 let mic = null;
 async function toggleMic() {
   if (mic) return stopMic();
+  const ready = sound(); // inside the tap
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-    const src = ctx.createMediaStreamSource(stream), node = ctx.createScriptProcessor(CHUNK, 1, 1);
-    node.onaudioprocess = e => push(to16k(e.inputBuffer.getChannelData(0), ctx.sampleRate));
-    src.connect(node); node.connect(ctx.destination);
-    mic = { ctx, stream, node, src };
-    const aya = AYAT[+$('#liveAya').value];
-    run = { aya, who: 'You', ms: [], lag: [], final: '', tent: '' };
-    showAya(aya, null, 'You');
-    $('#sndH').textContent = '';
+    await ready;
+    const start = AYAT[+$('#liveAya').value], seq = AYAT.filter(x => x.s === start.s && x.a >= start.a);
+    run = { seq, c: 0, cut: 0, who: 'You', ms: [], lag: [], final: '', tent: '', right: 0, words: 0 };
+    showAya(seq[0], null, 'You');
+    $('#sndH').textContent = ''; $('#log').innerHTML = ''; $('#sAcc').textContent = '–';
     worker.postMessage({ type: 'start' });
+    const src = actx.createMediaStreamSource(stream), node = tap();
+    src.connect(node);
+    mic = { stream, src, node };
     $('#mic').textContent = 'Stop';
     $('#bench').disabled = true;
-    status('#tstatus', `Listening… recite ${aya.name} ${aya.a}.`);
+    status('#tstatus', `Listening… recite from ${start.name} ${start.a}; it moves on as you do.`);
   } catch (e) { status('#tstatus', 'Microphone: ' + e.message, true); }
 }
 async function stopMic() {
   const m = mic; mic = null;
-  m.node.disconnect(); m.src.disconnect(); m.stream.getTracks().forEach(t => t.stop()); m.ctx.close();
+  m.node.port.postMessage('stop'); m.src.disconnect(); m.node.disconnect(); m.stream.getTracks().forEach(t => t.stop());
   $('#mic').textContent = 'Recite live';
   status('#tstatus', 'Finishing…');
   await flush();
-  const states = verdict();
-  const ok = states.filter(s => s.state === 'ok').length;
-  if (run?.ms.length) save({ test: `you · ${run.aya.name} ${run.aya.a}`, ms: avg(run.ms), worst: Math.max(...run.ms), lag: avg(run.lag), acc: null, live: true });
-  status('#tstatus', `Stopped: ${ok}/${states.length} words right. Speed saved below.`);
+  const last = run.seq[run.c], st = follow(true);
+  if (st.some(x => x.state !== 'todo')) closeAya(last, st);
+  if (run.ms.length) save({ test: `you · ${run.seq[0].name} ${run.seq[0].a}–${last.a}`, ms: avg(run.ms), worst: Math.max(...run.ms), lag: avg(run.lag), acc: run.words ? run.right / run.words * 100 : null, live: true, words: run.words });
+  status('#tstatus', `Stopped: ${run.right}/${run.words} words right over ${run.c + 1} ayat. Speed saved below.`);
   run = null;
   $('#bench').disabled = false;
 }
