@@ -153,7 +153,11 @@ const Match = (() => {
     const endHar = (j, h) => !ISHAR[h] ? -1 : j > 0 && edge[j - 1] === 1 && ISHAR[E[j - 1]] ? j - 1 : j < m && edge[j] === 1 && ISHAR[E[j]] ? j : -1;
     const insc = (j, h, ic) => LET[h] && E[j - 1] === h ? SHADDA : h === HAMZA && j < m && edge[j] === 2 ? PAUSE : endHar(j, h) >= 0 ? 1 : ic;
     for (let j = 1; j <= m; j++) { cost[j] = cost[j - 1] + dcost[j - 1]; back[j] = 2; }
-    const ws = expected._w.filter(([a, b]) => b > a), jump = new Map(); // words (in units); where each going-back came from
+    // words (in units), and for each row and word, where a going-back to that
+    // word's start came from (-1: none); jumps only ever land on a word's start
+    const ws = expected._w.filter(([a, b]) => b > a), nw = ws.length, jump = new Int32Array((n + 1) * Math.max(1, nw)).fill(-1);
+    const wordAt = new Int32Array(m + 1).fill(-1);
+    ws.forEach(([a], v) => { if (wordAt[a] < 0) wordAt[a] = v; });
     for (let i = 1; i <= n; i++) {
       const r = i * W, p = r - W, h = H[i - 1];
       const ic = LET[h] && i > 1 && H[i - 2] === h ? SHADDA : unsure(i - 1) ? Math.min(INSC[h], SHADDA) : INSC[h];
@@ -168,14 +172,14 @@ const Match = (() => {
       }
       // going back: after a word, the reader may start again from up to REPEAT_WORDS
       // words before (to repeat, or to correct themselves); then forward as usual
-      if (ws.length > 1) {
+      if (nw > 1) {
         let moved = false;
-        for (let we = 0; we < ws.length; we++) {
-          const from = ws[we][1], c = cost[r + from] + REPEAT;
-          for (let v = Math.max(0, we - REPEAT_WORDS + 1); v <= we; v++) {
-            const to = ws[v][0];
-            if (to < from && c < cost[r + to] - 1e-6) { cost[r + to] = c; back[r + to] = 4; jump.set(r + to, from); moved = true; }
-          }
+        for (let v = 0; v < nw; v++) {
+          // the cheapest word end within REPEAT_WORDS after this word's start
+          const to = ws[v][0];
+          let best = Infinity, from = -1;
+          for (let we = v; we < Math.min(nw, v + REPEAT_WORDS); we++) { const f = ws[we][1]; if (f > to && cost[r + f] < best) { best = cost[r + f]; from = f; } }
+          if (from >= 0 && best + REPEAT < cost[r + to] - 1e-6) { cost[r + to] = best + REPEAT; back[r + to] = 4; jump[i * nw + v] = from; moved = true; }
         }
         if (moved) for (let j = 1; j <= m; j++) if (cost[r + j - 1] + dcost[j - 1] < cost[r + j] - 1e-6) { cost[r + j] = cost[r + j - 1] + dcost[j - 1]; back[r + j] = 2; }
       }
@@ -186,10 +190,11 @@ const Match = (() => {
     const bad = new Float32Array(m + 1), type = new Uint8Array(m + 1), got = new Array(m).fill(''), fin = new Uint8Array(m), pos = new Int32Array(m).fill(-1);
     const hit = new Uint8Array(m); // the unit was heard (as itself, or as a sound it is confused with)
     const seen = new Uint8Array(m + 1); // judged already: from a later attempt (said again), which is the one that counts
-    let i = n, j = end;
+    let i = n, j = end, steps = 0;
     while (i > 0 || j > 0) {
+      if (++steps > (n + m) * 3 + 64) break; // can't happen; never hang the page if it did
       const b = back[i * W + j];
-      if (b === 4) { j = jump.get(i * W + j); continue; }
+      if (b === 4) { const f = jump[i * nw + wordAt[j]]; if (f < 0 || f <= j) break; j = f; continue; }
       if ((b === 1 || b === 2) && seen[j - 1]) { if (b === 1) i--; j--; continue; }
       if (b === 1 || b === 2) seen[j - 1] = 1;
       if (b === 1) {
