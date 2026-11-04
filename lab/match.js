@@ -105,6 +105,9 @@ const Match = (() => {
   // on a sound it was unsure of is taken for a mishearing, never a mistake
   // opt.alts: per heard character, the other sounds the model gave a fair chance
   // (a string, or { sound: chance }); when the expected sound is one, it counts as heard
+  // expected.refs (optional): per word, how real reciters reading it right were
+  // heard (where that differs from how it should sound); a word heard like one
+  // of them is not a mistake
   // returns per word { state: 'ok'|'err'|'hear'|'todo', type, heard, at }
   function words(expected, heard, finalLen = heard.length, done = false, opt = {}) {
     if (!expected._u) prepare(expected);
@@ -227,7 +230,8 @@ const Match = (() => {
         i--;
       }
     }
-    return expected._w.map(([a, b]) => {
+    const refs = expected.refs;
+    return expected._w.map(([a, b], wi) => {
       if (b <= start) return { state: 'pre' };
       if (a >= end) return { state: 'todo' };
       // haraka mistakes and letter mistakes are weighed apart: a haraka said wrong
@@ -249,9 +253,32 @@ const Match = (() => {
       else if (har >= 1) { sum = har; t = 1; }
       const at = [pos[a], Math.min(b, end) > a ? pos[Math.min(b, end) - 1] + 1 : pos[a]]; // where in the heard units
       if (b > end) return { state: 'hear', heard: heardTxt, at };
+      if (sum >= 1 && refs?.[wi] && at[0] >= 0 && refs[wi].some(r => near(units(r), H.slice(at[0], at[1])))) sum = 0;
       if (sum >= 1) return { state: decided ? 'err' : 'hear', type: TYPES[t], heard: heardTxt, at };
       return { state: decided ? 'ok' : 'hear', heard: heardTxt, at };
     });
+  }
+
+  // two hearings of one word: alike, by the same costs (similar letters, madd,
+  // marks), within less than one wrong letter or haraka
+  const NEAR = 0.55;
+  function near(x, y) {
+    grow();
+    const n = x.length, m = y.length;
+    if (Math.abs(n - m) > 4) return false;
+    let prev = new Float32Array(m + 1), cur = new Float32Array(m + 1);
+    for (let j = 1; j <= m; j++) prev[j] = prev[j - 1] + INSC[y[j - 1]];
+    for (let i = 1; i <= n; i++) {
+      cur[0] = prev[0] + DELC[x[i - 1]];
+      let best = cur[0];
+      for (let j = 1; j <= m; j++) {
+        cur[j] = Math.min(prev[j - 1] + SUBC[x[i - 1] * K + y[j - 1]], prev[j] + DELC[x[i - 1]], cur[j - 1] + INSC[y[j - 1]]);
+        if (cur[j] < best) best = cur[j];
+      }
+      if (best > NEAR) return false;
+      [prev, cur] = [cur, prev];
+    }
+    return prev[m] <= NEAR;
   }
 
   // the aya's units, and each word as a [start, end) range of units
