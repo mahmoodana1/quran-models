@@ -8,7 +8,7 @@
 // without isolation it falls back to messages.
 //
 // in:  load {variant, ep, threads, shared: {ring, meta, time}} · start · audio {samples} · flush
-// out: progress {loaded, total} · ready {loadMs, ep, threads} · text {final, tent, conf (per character), ms, lag} · flushed · error {message}
+// out: progress {loaded, total} · ready {loadMs, ep, threads} · text {final, tent, conf, alts (per character), ms, lag} · flushed · error {message}
 
 const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/';
 const TJS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5';
@@ -17,13 +17,14 @@ const WIN = 2.5, RIGHT = 0.5, MIN_NEW = 0.25, RATE = 16000;
 const FRAME = 640;   // samples per output frame (40 ms); windows start on this grid so frames line up
 const MIN_WIN = 1.5; // s heard before anything is final (the very start needs context)
 const MAX_WIN = 8;   // s: the longest window read when catching up
+const ALT = 0.1;     // a sound the model gives this much chance, besides its first choice, is kept as a runner-up
 const now = () => performance.timeOrigin + performance.now(); // same clock as the page
 
 let ort, fe, vocab, session, fromCache = false;
 // the ring: meta[0] = samples written so far, time[0] = when the last ones came in
 let ring = new Float32Array(RATE * 30), meta = new Int32Array(1), time = new Float64Array(1);
 let base = 0;                                      // samples written before this recitation
-let kept = [], keptP = [], readUpTo = 0;            // final frames (by absolute frame number), how sure each was, and up to when (s)
+let kept = [], keptP = [], keptA = [], readUpTo = 0; // final frames (by absolute frame number), how sure each was, its runner-ups, and up to when (s)
 let live = false, looping = null;
 
 async function fetchParts(variant) {
@@ -80,29 +81,37 @@ async function load({ variant, ep, threads, shared }) {
 async function ids(x) {
   const f = (await fe(x)).input_features;
   const lg = (await session.run({ input_features: new ort.Tensor('float32', f.data, f.dims) })).logits;
-  const d = await lg.getData(), [, T, V] = lg.dims, o = new Int32Array(T), p = new Float32Array(T);
+  const d = await lg.getData(), [, T, V] = lg.dims, o = new Int32Array(T), p = new Float32Array(T), alt = new Array(T);
   for (let t = 0; t < T; t++) {
     let b = 0;
     for (let v = 1; v < V; v++) if (d[t * V + v] > d[t * V + b]) b = v;
     let z = 0;
     for (let v = 0; v < V; v++) z += Math.exp(d[t * V + v] - d[t * V + b]);
     o[t] = b; p[t] = 1 / z;
+    // the other sounds the model gave a fair chance here (not blank)
+    let a = '';
+    for (let v = 1; v < V; v++) if (v !== b && Math.exp(d[t * V + v] - d[t * V + b]) / z >= ALT) a += vocab[v];
+    alt[t] = a;
   }
-  o.p = p;
+  o.p = p; o.alt = alt;
   return o;
 }
 
 // frames -> text, with each character's confidence (the surest of its frames)
-function decode(list, probs) {
+// and the other sounds the model considered there
+function decode(list, probs, alts) {
   let out = '', prev = -1;
-  const conf = [];
+  const conf = [], alt = [];
   for (let k = 0; k < list.length; k++) {
     const b = list[k];
-    if (b !== prev && b !== 0) { out += vocab[b]; conf.push(probs[k]); }
-    else if (b === prev && b !== 0) conf[conf.length - 1] = Math.max(conf[conf.length - 1], probs[k]);
+    if (b !== prev && b !== 0) { out += vocab[b]; conf.push(probs[k]); alt.push(alts[k] || ''); }
+    else if (b === prev && b !== 0) {
+      conf[conf.length - 1] = Math.max(conf[conf.length - 1], probs[k]);
+      for (const c of alts[k] || '') if (!alt[alt.length - 1].includes(c)) alt[alt.length - 1] += c;
+    }
     prev = b;
   }
-  return { out, conf };
+  return { out, conf, alt };
 }
 
 const written = () => Atomics.load(meta, 0);
@@ -127,15 +136,15 @@ async function step(final) {
   const o = await ids(slice(st, n));
   const ms = performance.now() - t0;
   const upto = final ? o.length : n - st < MIN_WIN * RATE ? 0 : Math.max(0, o.length - Math.round(RIGHT * RATE / FRAME));
-  for (let k = kept.length - f0; k < upto; k++) if (k >= 0) { kept[f0 + k] = o[k]; keptP[f0 + k] = o.p[k]; }
+  for (let k = kept.length - f0; k < upto; k++) if (k >= 0) { kept[f0 + k] = o[k]; keptP[f0 + k] = o.p[k]; keptA[f0 + k] = o.alt[k]; }
   // frames before f0 that were never made final (can't happen once WIN > RIGHT) stay blank
-  for (let k = 0; k < kept.length; k++) { kept[k] ??= 0; keptP[k] ??= 1; }
+  for (let k = 0; k < kept.length; k++) { kept[k] ??= 0; keptP[k] ??= 1; keptA[k] ??= ''; }
   const from = Math.max(0, kept.length - f0);
-  const tent = final ? [] : Array.from(o.subarray(from)), tentP = final ? [] : Array.from(o.p.subarray(from));
+  const tent = final ? [] : Array.from(o.subarray(from)), tentP = final ? [] : Array.from(o.p.subarray(from)), tentA = final ? [] : o.alt.slice(from);
   readUpTo = n / RATE;
   // lag: from when the newest sample read came in, to its letters being out
-  const fin = decode(kept, keptP).out, all = decode(kept.concat(tent), keptP.concat(tentP)); // together, so a letter on the seam isn't doubled
-  postMessage({ type: 'text', final: fin, tent: all.out.slice(fin.length), conf: all.conf, ms, lag: now() - heardAt, end: n / RATE });
+  const fin = decode(kept, keptP, keptA).out, all = decode(kept.concat(tent), keptP.concat(tentP), keptA.concat(tentA)); // together, so a letter on the seam isn't doubled
+  postMessage({ type: 'text', final: fin, tent: all.out.slice(fin.length), conf: all.conf, alts: all.alt, ms, lag: now() - heardAt, end: n / RATE });
 }
 
 // keep reading while the recitation goes on
@@ -181,7 +190,7 @@ onmessage = async ({ data }) => {
     if (data.type === 'load') await load(data);
     if (data.type === 'start') {
       live = false; await looping;
-      base = written(); kept = []; keptP = []; readUpTo = 0;
+      base = written(); kept = []; keptP = []; keptA = []; readUpTo = 0;
       live = true; looping = loop();
     }
     if (data.type === 'audio') { // no shared memory: the page sends the samples

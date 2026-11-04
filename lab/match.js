@@ -10,6 +10,8 @@
 //   - sounds it confuses (م/ن/ں, ت/ط, د/ض, س/ص/ث, ذ/ز/ظ, ق/ك, ء/ع, ه/ح, …)
 //   - madd length (ا ۦ ۥ said 2, 4 or 6 counts), ghunna length (ں)
 //   - small marks (qalqala ڇ, sakt ۜ, …)
+// Going back to say words again (to repeat, or to correct oneself) is never a
+// mistake: what counts is the last time each word was said.
 // A pause between two words (to breathe, or at a stop sign) changes how the
 // words around it sound, and is never a mistake: the last haraka dropped, a
 // tanween said as a long ā or left out, a hamza before the next word's ٱلْ.
@@ -90,6 +92,8 @@ const Match = (() => {
   const PAUSE = 0.25; // what a pause between words changes: not reported
   const LEAD = 0.3;   // each sound heard before the aya begins, with opt.freeLead (less than a wrong letter)
   const UNSURE = 0.6; // below this confidence, a heard sound is not trusted to show a mistake
+  const ALT_MIN = 0.1; // a runner-up sound given at least this chance
+  const REPEAT = 1.2, REPEAT_WORDS = 12; // going back to say words again: its cost (no mistake), and how far back
 
   // expected: { ph, spans: [[start, end) per word] } in script characters,
 // and which words start with hamzat al-wasl: wasl (indices) or words (text)
@@ -98,6 +102,8 @@ const Match = (() => {
   // opt.freeLead: what was heard before the aya (a basmala, an isti'adha) costs nothing
   // opt.conf: how sure the model was of each heard character (0..1); a mismatch
   // on a sound it was unsure of is taken for a mishearing, never a mistake
+  // opt.alts: per heard character, the other sounds the model gave a fair chance
+  // (a string, or { sound: chance }); when the expected sound is one, it counts as heard
   // returns per word { state: 'ok'|'err'|'hear'|'todo', type, heard, at }
   function words(expected, heard, finalLen = heard.length, done = false, opt = {}) {
     if (!expected._u) prepare(expected);
@@ -114,6 +120,20 @@ const Match = (() => {
       }
     }
     const unsure = i => Hc !== null && Hc[i] < UNSURE;
+    // each heard unit's runner-ups, as sound ids
+    let Ha = null;
+    if (opt.alts) {
+      Ha = new Array(H.length);
+      let u = -1, prev = null, k = 0;
+      for (const c of heard) {
+        if (!(MADD.has(c) && c === prev)) u++;
+        const a = opt.alts[k] || '';
+        for (const x of typeof a === 'string' ? a : Object.keys(a).filter(y => a[y] >= ALT_MIN)) (Ha[u] ||= new Set()).add(id(x));
+        prev = c; k++;
+      }
+      grow();
+    }
+    const runnerUp = (i, e) => Ha !== null && !!Ha[i]?.has(e);
     const hFinal = units(heard.slice(0, finalLen)).length;
     grow();
     const n = H.length, m = E.length, W = m + 1;
@@ -133,17 +153,31 @@ const Match = (() => {
     const endHar = (j, h) => !ISHAR[h] ? -1 : j > 0 && edge[j - 1] === 1 && ISHAR[E[j - 1]] ? j - 1 : j < m && edge[j] === 1 && ISHAR[E[j]] ? j : -1;
     const insc = (j, h, ic) => LET[h] && E[j - 1] === h ? SHADDA : h === HAMZA && j < m && edge[j] === 2 ? PAUSE : endHar(j, h) >= 0 ? 1 : ic;
     for (let j = 1; j <= m; j++) { cost[j] = cost[j - 1] + dcost[j - 1]; back[j] = 2; }
+    const ws = expected._w.filter(([a, b]) => b > a), jump = new Map(); // words (in units); where each going-back came from
     for (let i = 1; i <= n; i++) {
       const r = i * W, p = r - W, h = H[i - 1];
       const ic = LET[h] && i > 1 && H[i - 2] === h ? SHADDA : unsure(i - 1) ? Math.min(INSC[h], SHADDA) : INSC[h];
       cost[r] = cost[p] + (opt.freeLead ? LEAD : ic); back[r] = 3;
       for (let j = 1; j <= m; j++) {
-        let c = cost[p + j - 1] + (unsure(i - 1) ? Math.min(subc(j - 1, h), 0.2) : subc(j - 1, h)), b = 1;
+        let c = cost[p + j - 1] + (runnerUp(i - 1, E[j - 1]) ? 0.05 : unsure(i - 1) ? Math.min(subc(j - 1, h), 0.2) : subc(j - 1, h)), b = 1;
         const d = cost[r + j - 1] + dcost[j - 1];
         if (d < c) { c = d; b = 2; }
         const s = cost[p + j] + insc(j, h, ic);
         if (s < c) { c = s; b = 3; }
         cost[r + j] = c; back[r + j] = b;
+      }
+      // going back: after a word, the reader may start again from up to REPEAT_WORDS
+      // words before (to repeat, or to correct themselves); then forward as usual
+      if (ws.length > 1) {
+        let moved = false;
+        for (let we = 0; we < ws.length; we++) {
+          const from = ws[we][1], c = cost[r + from] + REPEAT;
+          for (let v = Math.max(0, we - REPEAT_WORDS + 1); v <= we; v++) {
+            const to = ws[v][0];
+            if (to < from && c < cost[r + to] - 1e-6) { cost[r + to] = c; back[r + to] = 4; jump.set(r + to, from); moved = true; }
+          }
+        }
+        if (moved) for (let j = 1; j <= m; j++) if (cost[r + j - 1] + dcost[j - 1] < cost[r + j] - 1e-6) { cost[r + j] = cost[r + j - 1] + dcost[j - 1]; back[r + j] = 2; }
       }
     }
     let end = m;
@@ -151,13 +185,18 @@ const Match = (() => {
     // walk back: what happened to each expected unit
     const bad = new Float32Array(m + 1), type = new Uint8Array(m + 1), got = new Array(m).fill(''), fin = new Uint8Array(m), pos = new Int32Array(m).fill(-1);
     const hit = new Uint8Array(m); // the unit was heard (as itself, or as a sound it is confused with)
+    const seen = new Uint8Array(m + 1); // judged already: from a later attempt (said again), which is the one that counts
     let i = n, j = end;
     while (i > 0 || j > 0) {
       const b = back[i * W + j];
+      if (b === 4) { j = jump.get(i * W + j); continue; }
+      if ((b === 1 || b === 2) && seen[j - 1]) { if (b === 1) i--; j--; continue; }
+      if (b === 1 || b === 2) seen[j - 1] = 1;
       if (b === 1) {
         const x = E[j - 1] * K + H[i - 1];
-        if (SUBT[x] && subc(j - 1, H[i - 1]) === SUBC[x] && !unsure(i - 1)) { bad[j - 1] += SUBC[x]; type[j - 1] ||= SUBT[x]; }
-        hit[j - 1] = subc(j - 1, H[i - 1]) <= PAUSE || unsure(i - 1) ? 1 : 0;
+        const fine = unsure(i - 1) || runnerUp(i - 1, E[j - 1]);
+        if (SUBT[x] && subc(j - 1, H[i - 1]) === SUBC[x] && !fine) { bad[j - 1] += SUBC[x]; type[j - 1] ||= SUBT[x]; }
+        hit[j - 1] = subc(j - 1, H[i - 1]) <= PAUSE || fine ? 1 : 0;
         got[j - 1] = CH[H[i - 1]]; fin[j - 1] = i <= hFinal; pos[j - 1] = i - 1; i--; j--;
       } else if (b === 2) {
         if (dbad[j - 1]) { bad[j - 1] += DELC[E[j - 1]]; type[j - 1] ||= DELT[E[j - 1]]; }
@@ -166,8 +205,8 @@ const Match = (() => {
         const h = H[i - 1], doubled = LET[h] && ((i > 1 && H[i - 2] === h) || (j > 0 && E[j - 1] === h));
         const paused = h === HAMZA && j < m && edge[j] === 2;
         const eh = endHar(j, h);
-        if (eh >= 0) { bad[eh] += 1; type[eh] ||= 1; }
-        else if (INST[h] && !doubled && !paused && !unsure(i - 1) && j > 0 && j < m) { bad[j] += INSC[h]; type[j] ||= INST[h]; }
+        if (eh >= 0 && !seen[eh]) { bad[eh] += 1; type[eh] ||= 1; }
+        else if (eh < 0 && INST[h] && !doubled && !paused && !unsure(i - 1) && j > 0 && j < m && !seen[j]) { bad[j] += INSC[h]; type[j] ||= INST[h]; }
         i--;
       }
     }
@@ -219,6 +258,7 @@ const Match = (() => {
 
   // each unit's confidence, from each character's (as units() groups them)
   function unitConf(s, conf) {
+    if (!conf) return [];
     const out = [];
     let prev = null, k = 0;
     for (const c of s) {
@@ -230,6 +270,19 @@ const Match = (() => {
     return out;
   }
 
-  return { words, units, unitConf, text: u => u.map(i => CH[i]).join('') };
+  // each unit's runner-up sounds (a string), as units() groups the characters
+  function unitAlts(s, alts) {
+    const out = [];
+    if (!alts) return out;
+    let prev = null, k = 0;
+    for (const c of s) {
+      const a = alts[k++] || '', v = typeof a === 'string' ? a : Object.keys(a).filter(y => a[y] >= ALT_MIN).join('');
+      if (MADD.has(c) && c === prev) out[out.length - 1] += v; else out.push(v);
+      prev = c;
+    }
+    return out;
+  }
+
+  return { words, units, unitConf, unitAlts, text: u => u.map(i => CH[i]).join('') };
 })();
 if (typeof module !== 'undefined') module.exports = Match;
