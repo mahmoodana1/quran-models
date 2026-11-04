@@ -1,5 +1,10 @@
 'use strict';
 
+// the microphone as it is: the browser's echo cancellation, noise suppression and
+// gain control are made for calls, and take recitation's long held sounds (madd,
+// ghunna) and echo for noise to remove; the model evens out loudness itself
+const RAW_MIC = { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+
 // The candidates: one model file (8-bit, 4-bit or fp16) on one backend.
 // The download cache is keyed by each part's hash, so a page update never
 // throws away models already on the phone.
@@ -314,7 +319,7 @@ async function toggleMic() {
   if (mic) return stopMic();
   const ready = sound(); // inside the tap
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: RAW_MIC });
     await ready;
     const start = AYAT[+$('#liveAya').value], seq = AYAT.filter(x => x.s === start.s && x.a >= start.a);
     run = { seq, c: 0, cut: 0, who: 'You', ms: [], lag: [], final: '', tent: '', right: 0, words: 0 };
