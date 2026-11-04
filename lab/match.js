@@ -221,14 +221,17 @@ const Match = (() => {
       // is a mistake; letters only make a different word when fewer than half
       // of the word's letters were heard, or four were off (two or three
       // misheard letters are common on a phone's microphone)
-      let har = 0, letc = 0, tl = 0, heardTxt = '', decided = true, hits = 0, lets = 0, lhits = 0;
+      // (a doubled letter, or a ghunna's run of م/ن, is one sound for whether the word was heard)
+      let har = 0, letc = 0, tl = 0, heardTxt = '', decided = true, hits = 0, len = 0, lets = 0, lhits = 0;
       for (let k = a; k < Math.min(b, end); k++) {
         if (type[k] === 1) har += bad[k]; else { letc += bad[k]; tl ||= type[k]; }
-        heardTxt += got[k]; decided &&= !!fin[k]; hits += hit[k];
+        heardTxt += got[k]; decided &&= !!fin[k];
+        if (k > a && LET[E[k]] && E[k - 1] === E[k]) { if (hit[k] && !hit[k - 1]) { hit[k - 1] = 1; hits++; } }
+        else { len++; hits += hit[k]; }
         if (LET[E[k]]) { lets++; lhits += hit[k]; }
       }
       let sum = 0, t = 0;
-      if (b <= end && b > a && hits * 3 < b - a) { sum = 1; t = 3; } // most of the word not heard at all: left out
+      if (b <= end && b > a && hits * 3 < len) { sum = 1; t = 3; } // most of the word not heard at all: left out
       else if (letc >= 1.2 && (lhits < lets * 0.5 || letc >= 2.4)) { sum = letc; t = tl || 2; }
       else if (har >= 1) { sum = har; t = 1; }
       const at = [pos[a], Math.min(b, end) > a ? pos[Math.min(b, end) - 1] + 1 : pos[a]]; // where in the heard units
