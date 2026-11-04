@@ -253,14 +253,36 @@ const Match = (() => {
       else if (har >= 1) { sum = har; t = 1; }
       const at = [pos[a], Math.min(b, end) > a ? pos[Math.min(b, end) - 1] + 1 : pos[a]]; // where in the heard units
       if (b > end) return { state: 'hear', heard: heardTxt, at };
-      if (sum >= 1 && refs?.[wi] && at[0] >= 0 && refs[wi].some(r => near(units(r), H.slice(at[0], at[1])))) sum = 0;
-      if (sum >= 1) return { state: decided ? 'err' : 'hear', type: TYPES[t], heard: heardTxt, at };
+      // what was heard for it: from its first sound heard to its last (its first may be the one left out)
+      let p0 = -1, p1 = -1;
+      for (let k = a; k < Math.min(b, end); k++) if (pos[k] >= 0) { if (p0 < 0) p0 = pos[k]; p1 = pos[k] + 1; }
+      const span = p0 >= 0 ? [p0, p1] : null;
+      // heard as a real reciter reading it right was heard (near one of the word's
+      // references); or, for a word mostly not heard, no further from it than one
+      if (sum >= 1 && refs?.[wi] && span) {
+        const hu = H.slice(span[0], span[1]), ex = t === 3 ? E.slice(a, b) : null, dh = ex && dist(ex, hu);
+        if (refs[wi].some(r => { const ru = units(r); return near(ru, hu) || (ex && dh <= dist(ex, ru) + 0.3); })) sum = 0;
+      }
+      if (sum >= 1) return { state: decided ? 'err' : 'hear', type: TYPES[t], heard: heardTxt, at, span };
       return { state: decided ? 'ok' : 'hear', heard: heardTxt, at };
     });
   }
 
   // two hearings of one word: alike, by the same costs (similar letters, madd,
   // marks), within less than one wrong letter or haraka
+  // how far apart two hearings are, by the same costs
+  function dist(x, y) {
+    grow();
+    const n = x.length, m = y.length;
+    let prev = new Float32Array(m + 1), cur = new Float32Array(m + 1);
+    for (let j = 1; j <= m; j++) prev[j] = prev[j - 1] + INSC[y[j - 1]];
+    for (let i = 1; i <= n; i++) {
+      cur[0] = prev[0] + DELC[x[i - 1]];
+      for (let j = 1; j <= m; j++) cur[j] = Math.min(prev[j - 1] + SUBC[x[i - 1] * K + y[j - 1]], prev[j] + DELC[x[i - 1]], cur[j - 1] + INSC[y[j - 1]]);
+      [prev, cur] = [cur, prev];
+    }
+    return prev[m];
+  }
   const NEAR = 0.55;
   function near(x, y) {
     grow();
