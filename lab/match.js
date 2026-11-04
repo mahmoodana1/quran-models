@@ -100,6 +100,7 @@ const Match = (() => {
   // heard: the model's text so far; finalLen: how much of it is final;
   // done: the reciter stopped, so the whole aya must be accounted for
   // opt.freeLead: what was heard before the aya (a basmala, an isti'adha) costs nothing
+  // opt.freeStart: the reading may begin at any word (those before it: state 'pre')
   // opt.conf: how sure the model was of each heard character (0..1); a mismatch
   // on a sound it was unsure of is taken for a mishearing, never a mistake
   // opt.alts: per heard character, the other sounds the model gave a fair chance
@@ -162,6 +163,7 @@ const Match = (() => {
     const delc = (r, j) => wh[j - 1] && back[r + j - 1] === 2 ? WASL_H : dcost[j - 1];
     const insc = (i, j, h, ic) => LET[h] && E[j - 1] === h ? SHADDA : wasl(i, j, h) ? PAUSE : endHar(j, h) >= 0 ? 1 : ic;
     for (let j = 1; j <= m; j++) { cost[j] = cost[j - 1] + delc(0, j); back[j] = 2; }
+    if (opt.freeStart) for (const [a] of expected._w) if (a > 0 && a < m) { cost[a] = 0; back[a] = 0; }
     // words (in units), and for each row and word, where a going-back to that
     // word's start came from (-1: none); jumps only ever land on a word's start
     const ws = expected._w.filter(([a, b]) => b > a), nw = ws.length, jump = new Int32Array((n + 1) * Math.max(1, nw)).fill(-1);
@@ -199,8 +201,9 @@ const Match = (() => {
     const bad = new Float32Array(m + 1), type = new Uint8Array(m + 1), got = new Array(m).fill(''), fin = new Uint8Array(m), pos = new Int32Array(m).fill(-1);
     const hit = new Uint8Array(m); // the unit was heard (as itself, or as a sound it is confused with)
     const seen = new Uint8Array(m + 1); // judged already: from a later attempt (said again), which is the one that counts
-    let i = n, j = end, steps = 0;
+    let i = n, j = end, steps = 0, start = 0;
     while (i > 0 || j > 0) {
+      if (i === 0 && opt.freeStart && back[j] === 0) { start = j; break; }
       if (++steps > (n + m) * 3 + 64) break; // can't happen; never hang the page if it did
       const b = back[i * W + j];
       if (b === 4) { const f = jump[i * nw + wordAt[j]]; if (f < 0 || f <= j) break; j = f; continue; }
@@ -225,6 +228,7 @@ const Match = (() => {
       }
     }
     return expected._w.map(([a, b]) => {
+      if (b <= start) return { state: 'pre' };
       if (a >= end) return { state: 'todo' };
       // haraka mistakes and letter mistakes are weighed apart: a haraka said wrong
       // is a mistake; letters only make a different word when fewer than half
