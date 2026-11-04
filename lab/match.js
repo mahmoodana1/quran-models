@@ -139,10 +139,14 @@ const Match = (() => {
     const n = H.length, m = E.length, W = m + 1;
     const cost = new Float32Array((n + 1) * W), back = new Uint8Array((n + 1) * W);
     // deleting E[j], with the shadda and pause allowances; dbad: whether that is a mistake
-    const dcost = new Float32Array(m), dbad = new Uint8Array(m);
+    // wh: the haraka of a hamzat al-wasl at the aya's start (ءَ); said joined to the aya
+    // before, both go: the haraka alone left out, or said differently, is still a mistake
+    const dcost = new Float32Array(m), dbad = new Uint8Array(m), wh = new Uint8Array(m);
     for (let j = 0; j < m; j++) {
+      wh[j] = j && edge[j - 1] === 2 && E[j - 1] === HAMZA && ISHAR[E[j]] ? 1 : 0;
       if (LET[E[j]] && j && E[j - 1] === E[j]) dcost[j] = SHADDA;
       else if (edge[j] === 1 && (ISHAR[E[j]] || E[j] === NUN)) dcost[j] = PAUSE;
+      else if (edge[j] === 2 && E[j] === HAMZA) dcost[j] = PAUSE;
       else { dcost[j] = DELC[E[j]]; dbad[j] = DELT[E[j]] ? 1 : 0; }
     }
     // hearing h where E[j] was expected; a tanween's ن said as a long ā at a pause is fine
@@ -151,8 +155,13 @@ const Match = (() => {
     // but a haraka heard where a word's last haraka was expected is a wrong haraka, not a pause
     // (on either side of it): returns which expected unit it belongs to, or -1
     const endHar = (j, h) => !ISHAR[h] ? -1 : j > 0 && edge[j - 1] === 1 && ISHAR[E[j - 1]] ? j - 1 : j < m && edge[j] === 1 && ISHAR[E[j]] ? j : -1;
-    const insc = (j, h, ic) => LET[h] && E[j - 1] === h ? SHADDA : h === HAMZA && j < m && edge[j] === 2 ? PAUSE : endHar(j, h) >= 0 ? 1 : ic;
-    for (let j = 1; j <= m; j++) { cost[j] = cost[j - 1] + dcost[j - 1]; back[j] = 2; }
+    // (and the haraka after that hamza: ءَ or ءِ); before an aya opening with hamzat al-wasl
+    // joined to the one before, that aya's tanween and the haraka joining them (أَحَدٌ ٱللَّهُ: دُنِللَاهُ)
+    const wasl = (i, j, h) => j < m && edge[j] === 2 && (h === HAMZA || (ISHAR[h] && i > 1 && H[i - 2] === HAMZA) || (E[j] === HAMZA && (h === NUN || ISHAR[h])));
+    const WASL_H = 0.4;
+    const delc = (r, j) => wh[j - 1] && back[r + j - 1] === 2 ? WASL_H : dcost[j - 1];
+    const insc = (i, j, h, ic) => LET[h] && E[j - 1] === h ? SHADDA : wasl(i, j, h) ? PAUSE : endHar(j, h) >= 0 ? 1 : ic;
+    for (let j = 1; j <= m; j++) { cost[j] = cost[j - 1] + delc(0, j); back[j] = 2; }
     // words (in units), and for each row and word, where a going-back to that
     // word's start came from (-1: none); jumps only ever land on a word's start
     const ws = expected._w.filter(([a, b]) => b > a), nw = ws.length, jump = new Int32Array((n + 1) * Math.max(1, nw)).fill(-1);
@@ -164,9 +173,9 @@ const Match = (() => {
       cost[r] = cost[p] + (opt.freeLead ? LEAD : ic); back[r] = 3;
       for (let j = 1; j <= m; j++) {
         let c = cost[p + j - 1] + (runnerUp(i - 1, E[j - 1]) ? 0.05 : unsure(i - 1) ? Math.min(subc(j - 1, h), 0.2) : subc(j - 1, h)), b = 1;
-        const d = cost[r + j - 1] + dcost[j - 1];
+        const d = cost[r + j - 1] + delc(r, j);
         if (d < c) { c = d; b = 2; }
-        const s = cost[p + j] + insc(j, h, ic);
+        const s = cost[p + j] + insc(i, j, h, ic);
         if (s < c) { c = s; b = 3; }
         cost[r + j] = c; back[r + j] = b;
       }
@@ -181,7 +190,7 @@ const Match = (() => {
           for (let we = v; we < Math.min(nw, v + REPEAT_WORDS); we++) { const f = ws[we][1]; if (f > to && cost[r + f] < best) { best = cost[r + f]; from = f; } }
           if (from >= 0 && best + REPEAT < cost[r + to] - 1e-6) { cost[r + to] = best + REPEAT; back[r + to] = 4; jump[i * nw + v] = from; moved = true; }
         }
-        if (moved) for (let j = 1; j <= m; j++) if (cost[r + j - 1] + dcost[j - 1] < cost[r + j] - 1e-6) { cost[r + j] = cost[r + j - 1] + dcost[j - 1]; back[r + j] = 2; }
+        if (moved) for (let j = 1; j <= m; j++) if (cost[r + j - 1] + delc(r, j) < cost[r + j] - 1e-6) { cost[r + j] = cost[r + j - 1] + delc(r, j); back[r + j] = 2; }
       }
     }
     let end = m;
@@ -204,12 +213,12 @@ const Match = (() => {
         hit[j - 1] = subc(j - 1, H[i - 1]) <= PAUSE || fine ? 1 : 0;
         got[j - 1] = CH[H[i - 1]]; fin[j - 1] = i <= hFinal; pos[j - 1] = i - 1; i--; j--;
       } else if (b === 2) {
-        if (dbad[j - 1]) { bad[j - 1] += DELC[E[j - 1]]; type[j - 1] ||= DELT[E[j - 1]]; }
+        if (dbad[j - 1] && !(wh[j - 1] && back[i * W + j - 1] === 2)) { bad[j - 1] += DELC[E[j - 1]]; type[j - 1] ||= DELT[E[j - 1]]; }
         fin[j - 1] = i <= hFinal; pos[j - 1] = i; j--;
       } else {
         const h = H[i - 1], doubled = LET[h] && ((i > 1 && H[i - 2] === h) || (j > 0 && E[j - 1] === h));
-        const paused = h === HAMZA && j < m && edge[j] === 2;
-        const eh = endHar(j, h);
+        const paused = wasl(i, j, h);
+        const eh = paused ? -1 : endHar(j, h);
         if (eh >= 0 && !seen[eh]) { bad[eh] += 1; type[eh] ||= 1; }
         else if (eh < 0 && INST[h] && !doubled && !paused && !unsure(i - 1) && j > 0 && j < m && !seen[j]) { bad[j] += INSC[h]; type[j] ||= INST[h]; }
         i--;
