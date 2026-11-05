@@ -45,7 +45,7 @@ const Match = (() => {
   }
 
   // costs, precomputed per pair of sounds: [cost, mistake type]
-  const TYPES = [null, 'haraka', 'letter', 'missing', 'extra', 'madd', 'ghunna'];
+  const TYPES = [null, 'haraka', 'letter', 'missing', 'extra', 'madd', 'ghunna']; // (and 'order': see words())
   let K = 0, built = 0, SUBC, SUBT, DELC, DELT, INSC, INST, LET, ISMADD, ISHAR;
   // (re)build the tables when sounds were added
   function grow() {
@@ -114,7 +114,7 @@ const Match = (() => {
   // heard (where that differs from how it should sound); a word heard like one
   // of them is not a mistake
   // returns per word { state: 'ok'|'err'|'hear'|'todo', type, heard, at }
-  function words(expected, heard, finalLen = heard.length, done = false, opt = {}) {
+  function core(expected, heard, finalLen, done, opt) {
     if (!expected._u) prepare(expected);
     const E = expected._u, edge = expected._edge, H = units(heard);
     // each heard unit's confidence (a run of one madd char: its surest)
@@ -263,7 +263,7 @@ const Match = (() => {
     }
     const refs = expected.refs;
     const tj = opt.tajweed || opt.onTj ? tajweed(E, expected._len, expected._w, H, Hlen, Hc, al, pos, end, opt.onTj, opt.tjSkip || expected._tj, expected.ends ? new Set(expected.ends) : null, typeof opt.tajweed === 'object' ? opt.tajweed : undefined) : null;
-    return expected._w.map(([a, b], wi) => {
+    const out = expected._w.map(([a, b], wi) => {
       if (b <= start) return { state: 'pre' };
       if (a >= end) return { state: 'todo' };
       // haraka mistakes and letter mistakes are weighed apart: a haraka said wrong
@@ -300,6 +300,59 @@ const Match = (() => {
       if (sum >= 1) return { state: decided ? 'err' : 'hear', type: TYPES[t], heard: heardTxt, at, span };
       return { state: decided ? 'ok' : 'hear', heard: heardTxt, at };
     });
+    out.cost = cost[n * W + end];
+    return out;
+  }
+
+  // ---- two neighbouring words said in the other order (B A for A B). The alignment alone
+  // explains that as one word left out and another said twice, or as wrong letters, and marks
+  // whichever fits, often neither of the two. So where a word is marked, the reading is tried
+  // against the aya with it and a neighbour swapped; if that explains what was heard clearly
+  // better, the two are marked as said out of order, and nothing else for it.
+  const SWAP = 0.9; // what the swapped reading must explain better by (a word left out costs up to WSKIP)
+  const SWAP_TRY = 4; // pairs tried at most
+  function swapped(ex, v) {
+    const [sa, ea] = ex.spans[v], [sb, eb] = ex.spans[v + 1], ph = ex.ph;
+    const A = ph.slice(sa, ea), gap = ph.slice(ea, sb), B = ph.slice(sb, eb);
+    const at = c => c >= sa && c < ea ? c - sa + sa + B.length + gap.length : c >= ea && c < sb ? c - ea + sa + B.length : c >= sb && c < eb ? c - sb + sa : c;
+    const e = {};
+    for (const k of Object.keys(ex)) if (k[0] !== '_') e[k] = ex[k];
+    e.ph = ph.slice(0, sa) + B + gap + A + ph.slice(eb);
+    e.spans = ex.spans.map((sp, i) => i === v ? [sa, sa + B.length] : i === v + 1 ? [sa + B.length + gap.length, eb] : sp);
+    const sw = i => i === v ? v + 1 : i === v + 1 ? v : i;
+    if (ex.wasl) e.wasl = ex.wasl.map(sw);
+    if (ex.words) e.words = ex.words.map((_, i) => ex.words[sw(i)]);
+    if (ex.refs) e.refs = ex.refs.map((_, i) => ex.refs[sw(i)]);
+    if (ex.tj) e.tj = ex.tj.map(at);
+    return e;
+  }
+  function words(expected, heard, finalLen = heard.length, done = false, opt = {}) {
+    const st = core(expected, heard, finalLen, done, opt);
+    if (opt.noSwap || expected.spans.length < 2) return st;
+    const ends = expected.ends ? new Set(expected.ends) : null, ph = expected.ph, sp = expected.spans;
+    const word = i => ph.slice(sp[i][0], sp[i][1]);
+    const pairs = [];
+    st.forEach((x, k) => {
+      if (x.state !== 'err' || x.type === 'haraka' || x.type === 'madd' || x.type === 'ghunna') return;
+      for (const v of [k - 1, k]) if (v >= 0 && v + 1 < sp.length && !pairs.includes(v) && !ends?.has(v)
+        && sp[v][1] > sp[v][0] && sp[v + 1][1] > sp[v + 1][0] && word(v) !== word(v + 1)
+        && st[v].state !== 'pre' && st[v + 1].state !== 'todo' && st[v + 1].state !== 'pre') pairs.push(v);
+    });
+    let best = null, bestCost = st.cost - SWAP;
+    for (const v of pairs.slice(0, SWAP_TRY)) {
+      const s2 = core(swapped(expected, v), heard, finalLen, done, opt);
+      // the two must then be heard as they are, each
+      if (s2.cost < bestCost - 1e-6 && s2[v].state !== 'err' && s2[v + 1].state !== 'err' && s2[v + 1].state !== 'todo') { best = { v, s2 }; bestCost = s2.cost; }
+    }
+    if (!best) return st;
+    const { v, s2 } = best, out = s2.slice();
+    out[v] = s2[v + 1]; out[v + 1] = s2[v]; // back in the aya's order
+    for (const k of [v, v + 1]) {
+      const x = out[k], decided = x.state === 'ok' || st[k].state === 'err';
+      out[k] = { state: decided ? 'err' : 'hear', type: 'order', heard: x.heard, at: x.at, span: x.at };
+    }
+    out.cost = s2.cost + SWAP;
+    return out;
   }
 
   // two hearings of one word: alike, by the same costs (similar letters, madd,
