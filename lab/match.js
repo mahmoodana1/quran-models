@@ -326,32 +326,63 @@ const Match = (() => {
     if (ex.tj) e.tj = ex.tj.map(at);
     return e;
   }
+  // words L..R of an aya (or ayas) as an aya of their own
+  function part(ex, L, R) {
+    const o = ex.spans[L][0], end = ex.spans[R][1], e = { ph: ex.ph.slice(o, end), spans: ex.spans.slice(L, R + 1).map(([a, b]) => [a - o, b - o]) };
+    if (ex.wasl) e.wasl = ex.wasl.filter(i => i >= L && i <= R).map(i => i - L);
+    if (ex.words) e.words = ex.words.slice(L, R + 1);
+    if (ex.refs) e.refs = ex.refs.slice(L, R + 1);
+    if (ex.tj) e.tj = ex.tj.filter(c => c >= o && c < end).map(c => c - o);
+    if (ex.ends) e.ends = ex.ends.filter(i => i >= L && i <= R).map(i => i - L);
+    return e;
+  }
+  // tried on the few words about the pair only, and what was heard for them: a whole window
+  // read again for each pair tried made a slow phone's page freeze where mistakes were many
+  const SWAP_AROUND = 2;
   function words(expected, heard, finalLen = heard.length, done = false, opt = {}) {
     const st = core(expected, heard, finalLen, done, opt);
     if (opt.noSwap || expected.spans.length < 2) return st;
     const ends = expected.ends ? new Set(expected.ends) : null, ph = expected.ph, sp = expected.spans;
     const word = i => ph.slice(sp[i][0], sp[i][1]);
+    const said = i => (st[i].state === 'ok' || st[i].state === 'err') && st[i].at;
     const pairs = [];
     st.forEach((x, k) => {
       if (x.state !== 'err' || x.type === 'haraka' || x.type === 'madd' || x.type === 'ghunna') return;
       for (const v of [k - 1, k]) if (v >= 0 && v + 1 < sp.length && !pairs.includes(v) && !ends?.has(v)
-        && sp[v][1] > sp[v][0] && sp[v + 1][1] > sp[v + 1][0] && word(v) !== word(v + 1)
-        && st[v].state !== 'pre' && st[v + 1].state !== 'todo' && st[v + 1].state !== 'pre') pairs.push(v);
+        && sp[v][1] > sp[v][0] && sp[v + 1][1] > sp[v + 1][0] && word(v) !== word(v + 1) && said(v) && said(v + 1)) pairs.push(v);
     });
-    let best = null, bestCost = st.cost - SWAP;
+    if (!pairs.length) return st;
+    const H = units(heard);
+    let out = null;
     for (const v of pairs.slice(0, SWAP_TRY)) {
-      const s2 = core(swapped(expected, v), heard, finalLen, done, opt);
-      // the two must then be heard as they are, each
-      if (s2.cost < bestCost - 1e-6 && s2[v].state !== 'err' && s2[v + 1].state !== 'err' && s2[v + 1].state !== 'todo') { best = { v, s2 }; bestCost = s2.cost; }
+      // the words about the pair, each said (so where they were heard is known), and what was heard for them
+      let L = v, R = v + 1;
+      while (L > 0 && v - L < SWAP_AROUND && said(L - 1) && !ends?.has(L - 1)) L--;
+      while (R + 1 < sp.length && R - v - 1 < SWAP_AROUND + 1 && said(R + 1) && !ends?.has(R)) R++;
+      // (to where the next word begins: a word said out of place may have been put down to it)
+      const span = [...Array(R - L + 1).keys()].map(i => st[L + i].at);
+      // (and from where the word before ended, or the start: a word said first may have been taken for a lead-in)
+      const pv = st[L - 1], nx = st[R + 1];
+      const u0 = Math.min(...span.map(x => x[0]), L === 0 ? 0 : pv?.at ? pv.at[1] : Infinity);
+      const u1 = Math.max(...span.map(x => x[1]), nx?.at && nx.state !== 'todo' ? nx.at[0] : R + 1 >= sp.length ? H.length : 0);
+      if (!(u1 > u0)) continue;
+      const c0 = charAt(heard, u0), c1 = charAt(heard, u1), sub = heard.slice(c0, c1);
+      const o = { ...opt, freeLead: false, freeStart: false, noSwap: true };
+      if (opt.conf) o.conf = opt.conf.slice(c0, c1);
+      if (opt.alts) o.alts = opt.alts.slice(c0, c1);
+      const loc = part(expected, L, R), here = core(loc, sub, sub.length, true, o);
+      const s2 = core(swapped(loc, v - L), sub, sub.length, true, o), a = v - L;
+      if (!(s2.cost + SWAP < here.cost - 1e-6) || s2[a].state === 'err' || s2[a + 1].state === 'err') continue;
+      // the swap explains it: the two marked as said out of order, the words about them as the swapped reading has them
+      out ||= st.slice();
+      const back = x => x.at ? { ...x, at: [x.at[0] + u0, x.at[1] + u0], span: x.span && [x.span[0] + u0, x.span[1] + u0] } : x;
+      for (let i = L; i <= R; i++) {
+        const x = back(s2[i === v ? a + 1 : i === v + 1 ? a : i - L]);
+        out[i] = i === v || i === v + 1 ? { state: 'err', type: 'order', heard: x.heard, at: x.at, span: x.at } : x;
+      }
     }
-    if (!best) return st;
-    const { v, s2 } = best, out = s2.slice();
-    out[v] = s2[v + 1]; out[v + 1] = s2[v]; // back in the aya's order
-    for (const k of [v, v + 1]) {
-      const x = out[k], decided = x.state === 'ok' || st[k].state === 'err';
-      out[k] = { state: decided ? 'err' : 'hear', type: 'order', heard: x.heard, at: x.at, span: x.at };
-    }
-    out.cost = s2.cost + SWAP;
+    if (!out) return st;
+    out.cost = st.cost;
     return out;
   }
 
