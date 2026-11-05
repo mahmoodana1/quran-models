@@ -91,7 +91,7 @@ const Match = (() => {
   const SHADDA = 0.3; // a doubled letter said single, or a single one said doubled: not reported
   const PAUSE = 0.25; // what a pause between words changes: not reported
   const LEAD = 0.3;   // each sound heard before the aya begins, with opt.freeLead (less than a wrong letter)
-  const UNSURE = 0.6; // below this confidence, a heard sound is not trusted to show a mistake
+  const UNSURE = 0.75; // below this confidence, a heard sound is not trusted to show a mistake (0.6 marked twice as many words in a noisy room, for the same mistakes caught)
   const ALT_MIN = 0.1; // a runner-up sound given at least this chance
   const REPEAT = 1.2, REPEAT_WORDS = 12; // going back to say words again: its cost (no mistake), and how far back
 
