@@ -103,6 +103,7 @@ const Match = (() => {
   // heard: the model's text so far; finalLen: how much of it is final;
   // done: the reciter stopped, so the whole aya must be accounted for
   // expected.ends (optional): the words that end an aya (where ayas are read one after another; else the last)
+  // opt.tajweed: true, or { madd, ghunna, munfasil }: those tajweed rules checked (see tajweed())
   // opt.freeLead: what was heard before the aya (a basmala, an isti'adha) costs nothing
   // opt.freeStart: the reading may begin at any word (those before it: state 'pre')
   // opt.conf: how sure the model was of each heard character (0..1); a mismatch
@@ -261,7 +262,7 @@ const Match = (() => {
       }
     }
     const refs = expected.refs;
-    const tj = opt.tajweed || opt.onTj ? tajweed(E, expected._len, expected._w, H, Hlen, Hc, al, pos, end, opt.onTj, opt.tjSkip || expected._tj, expected.ends ? new Set(expected.ends) : null) : null;
+    const tj = opt.tajweed || opt.onTj ? tajweed(E, expected._len, expected._w, H, Hlen, Hc, al, pos, end, opt.onTj, opt.tjSkip || expected._tj, expected.ends ? new Set(expected.ends) : null, typeof opt.tajweed === 'object' ? opt.tajweed : undefined) : null;
     return expected._w.map(([a, b], wi) => {
       if (b <= start) return { state: 'pre' };
       if (a >= end) return { state: 'todo' };
@@ -384,7 +385,8 @@ const Match = (() => {
   //   ghunna: a ghunna (idgham, ikhfa, iqlab, a doubled ن/م) said without its length
   // skip: expected units where correct reciters are heard otherwise (data/tj-*.json)
   const TJ_MADD = 1, TJ_GHUNNA = 2, TJ_SURE = 0.8;
-  function tajweed(E, Elen, W, H, Hlen, Hc, al, pos, end, onTj, skip, ends) {
+  // rules: { madd, ghunna, munfasil } which are checked (munfasil: held 4, not read short with qasr)
+  function tajweed(E, Elen, W, H, Hlen, Hc, al, pos, end, onTj, skip, ends, rules = { madd: true, ghunna: true }) {
     const out = new Uint8Array(E.length), sure = i => !Hc || Hc[i] >= TJ_SURE;
     for (let k = 0; k < Math.min(end, E.length); k++) {
       if (!MADDS.has(E[k]) || Elen[k] < 2 || skip?.has(k)) continue;
@@ -392,15 +394,16 @@ const Match = (() => {
       onTj?.('madd-' + kind, Elen[k], hl, i >= 0 && Hc ? Hc[i] : 1, k);
       // the sound before it heard (its haraka, its letter): the word was said here
       const around = k > 0 && al[k - 1] && sure(pos[k - 1]);
+      if (!rules.madd) continue;
       if (kind === 'tabii' && hl <= 1 && around && (i < 0 || sure(i))) out[k] = TJ_MADD;
-      if ((kind === 'muttasil' || kind === 'lazim') && Elen[k] >= 4 && hl <= 2 && i >= 0 && sure(i)) out[k] = TJ_MADD;
+      if ((kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= 2 && i >= 0 && sure(i)) out[k] = TJ_MADD;
       if (out[k]) onTj?.('flag', out[k], hl, 0, k);
     }
     for (let k = 0; k < Math.min(end, E.length);) {
       if (!NASAL.has(E[k])) { k++; continue; }
       let e = k, ge = 0, lo = Infinity, hi = -1;
       while (e < E.length && NASAL.has(E[e])) { ge += Elen[e]; if (al[e]) { lo = Math.min(lo, pos[e]); hi = Math.max(hi, pos[e]); } e++; }
-      if (ge >= 3 && e <= end && !skip?.has(k)) {
+      if (rules.ghunna && ge >= 3 && e <= end && !skip?.has(k)) {
         let gh = 0, ok = hi >= 0;
         if (hi >= 0) {
           while (lo > 0 && NASAL.has(H[lo - 1])) lo--;
@@ -414,7 +417,7 @@ const Match = (() => {
     }
     // idgham without ghunna (مِن رَّبِّهِم: مِرَّبِّ): the ن said where it merges into the doubled ل or ر
     for (let k = 1; k + 1 < Math.min(end, E.length); k++) {
-      if (!(E[k] === LAM || E[k] === RA) || E[k + 1] !== E[k] || !ISHAR[E[k - 1]] || skip?.has(k)) continue;
+      if (!rules.ghunna || !(E[k] === LAM || E[k] === RA) || E[k + 1] !== E[k] || !ISHAR[E[k - 1]] || skip?.has(k)) continue;
       const i = al[k] ? pos[k] : -1, j = al[k + 1] ? pos[k + 1] : -1;
       const nun = (i >= 0 && H[i] === NUN && sure(i)) || (j > 0 && H[j - 1] === NUN && (i < 0 || i === j - 1) && sure(j - 1));
       onTj?.('idgham', 2, nun ? 1 : 0, 1, k);
