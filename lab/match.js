@@ -45,7 +45,7 @@ const Match = (() => {
   }
 
   // costs, precomputed per pair of sounds: [cost, mistake type]
-  const TYPES = [null, 'haraka', 'letter', 'missing', 'extra', 'madd', 'ghunna']; // (and 'order': see words())
+  const TYPES = [null, 'haraka', 'letter', 'missing', 'extra', 'madd', 'ghunna', 'heavy', 'near', 'maddlong', 'maddnone']; // (and 'order': see words())
   let K = 0, built = 0, SUBC, SUBT, DELC, DELT, INSC, INST, LET, ISMADD, ISHAR;
   // (re)build the tables when sounds were added
   function grow() {
@@ -63,7 +63,15 @@ const Match = (() => {
   }
   const cost1 = ([c, t]) => [c, TYPES.indexOf(t)];
   [...'ءبتثجحخدذرزسشصضطظعغفقكلمنهويا' + 'ۦۥَُِ۪ـٲڇں۾ؙۜ'].forEach(id);
-  const NUN = id('ن'), HAMZA = id('ء'), LAM = id('ل'), RA = id('ر');
+  const NUN = id('ن'), HAMZA = id('ء'), LAM = id('ل'), RA = id('ر'), MIM = id('م'), GH = id('ں');
+  // letters the model tells apart (heard as the other with confidence, by correct reciters: under 0.1%
+  // of the time, the study), each a mistake of its own with opt.letters: a heavy letter said light
+  // or the other way (heavy), and letters near in sound (near). Not ت/ث (the model confuses them),
+  // nor ن/م inside a ghunna or at a stop, where the two sound alike.
+  const HEAVY = ['سص', 'تط', 'دض', 'ذظ', 'زظ', 'قك'], CLOSE = ['من', 'هح', 'ءع', 'ذز', 'ثس'];
+  const PAIR = new Map(); // 'ab' -> 7 heavy | 8 near
+  for (const [g, t] of [[HEAVY, 7], [CLOSE, 8]]) for (const q of g) { PAIR.set(q, t); PAIR.set(q[1] + q[0], t); }
+  const LETTER_SURE = 0.9;
 
   function sub(a, b) {
     if (a[0] === b[0]) return [0, null];
@@ -244,16 +252,23 @@ const Match = (() => {
         const x = E[j - 1] * K + H[i - 1];
         const fine = unsure(i - 1) || runnerUp(i - 1, E[j - 1]);
         if (SUBT[x] && subc(j - 1, H[i - 1]) === SUBC[x] && !fine) { bad[j - 1] += SUBC[x]; type[j - 1] ||= SUBT[x]; }
+        else if (opt.letters && !fine && (!Hc || Hc[i - 1] >= LETTER_SURE)) {
+          const pt = PAIR.get(CH[E[j - 1]] + CH[H[i - 1]]), e0 = E[j - 1];
+          const nasal = (e0 === NUN || e0 === MIM) && (edge[j - 1] === 1 || (j > 1 && (NASAL.has(E[j - 2]))) || (j < m && NASAL.has(E[j])) || (i > 1 && H[i - 2] === GH) || (i < n && (H[i] === GH || NASAL.has(H[i]))));
+          if (pt && (pt === 7 ? opt.letters.heavy : opt.letters.near) && !nasal) { bad[j - 1] += 1; type[j - 1] ||= pt; }
+        }
         // heard as itself, or as a sound it is confused with; a sound the model was unsure of
         // excuses a mismatch, but doesn't count as the unit heard (a long madd held into the
         // next word, heard as unclear sounds, is not that word said)
         hit[j - 1] = subc(j - 1, H[i - 1]) <= PAUSE || runnerUp(i - 1, E[j - 1]) ? 1 : 0;
+        if (opt.trace) opt.trace.push([CH[E[j - 1]], CH[H[i - 1]], Hc ? Hc[i - 1] : 1, Ha?.[i - 1] ? [...Ha[i - 1]].map(x => CH[x]).join('') : '', j - 1, i - 1, Hlen[i - 1]]);
         got[j - 1] = CH[H[i - 1]]; fin[j - 1] = i <= hFinal; pos[j - 1] = i - 1; al[j - 1] = 1; i--; j--;
       } else if (b === 2) {
         if (dbad[j - 1] && !(wh[j - 1] && back[i * W + j - 1] === 2)) { bad[j - 1] += DELC[E[j - 1]]; type[j - 1] ||= DELT[E[j - 1]]; }
         fin[j - 1] = i <= hFinal; pos[j - 1] = i; j--;
       } else {
         const h = H[i - 1], doubled = LET[h] && ((i > 1 && H[i - 2] === h) || (j > 0 && E[j - 1] === h));
+        if (opt.trace) opt.trace.push(['', CH[h], Hc ? Hc[i - 1] : 1, '', j, i - 1, Hlen[i - 1]]);
         const paused = wasl(i, j, h);
         const eh = paused ? -1 : endHar(j, h);
         if (eh >= 0 && !seen[eh]) { bad[eh] += 1; type[eh] ||= 1; }
@@ -271,9 +286,9 @@ const Match = (() => {
       // of the word's letters were heard, or four were off (two or three
       // misheard letters are common on a phone's microphone)
       // (a doubled letter, or a ghunna's run of م/ن, is one sound for whether the word was heard)
-      let har = 0, letc = 0, tl = 0, heardTxt = '', decided = true, hits = 0, len = 0, lets = 0, lhits = 0;
+      let har = 0, letc = 0, tl = 0, sim = 0, st = 0, heardTxt = '', decided = true, hits = 0, len = 0, lets = 0, lhits = 0;
       for (let k = a; k < Math.min(b, end); k++) {
-        if (type[k] === 1) har += bad[k]; else { letc += bad[k]; tl ||= type[k]; }
+        if (type[k] === 1) har += bad[k]; else if (type[k] === 7 || type[k] === 8) { sim += bad[k]; st ||= type[k]; } else { letc += bad[k]; tl ||= type[k]; }
         heardTxt += got[k]; decided &&= !!fin[k];
         if (k > a && LET[E[k]] && E[k - 1] === E[k]) { if (hit[k] && !hit[k - 1]) { hit[k - 1] = 1; hits++; } }
         else { len++; hits += hit[k]; }
@@ -282,6 +297,7 @@ const Match = (() => {
       let sum = 0, t = 0;
       if (b <= end && b > a && hits * 3 < len) { sum = 1; t = 3; } // most of the word not heard at all: left out
       else if (letc >= 1.2 && (lhits < lets * 0.5 || letc >= 2.4)) { sum = letc; t = tl || 2; }
+      else if (sim >= 1) { sum = sim; t = st; }
       else if (har >= 1) { sum = har; t = 1; }
       const at = [pos[a], Math.min(b, end) > a ? pos[Math.min(b, end) - 1] + 1 : pos[a]]; // where in the heard units
       if (b > end) return { state: 'hear', heard: heardTxt, at };
@@ -296,7 +312,7 @@ const Match = (() => {
         if (refs[wi].some(r => { const ru = units(r); return near(ru, hu) || (ex && dh <= dist(ex, ru) + 0.3); })) sum = 0;
       }
       // tajweed (opt.tajweed): the word said right, but a madd or a ghunna in it not given its length
-      if (sum < 1 && opt.tajweed && tj) for (let k = a; k < Math.min(b, end); k++) if (tj[k]) { sum = 1; t = tj[k] === TJ_MADD ? 5 : 6; break; }
+      if (sum < 1 && opt.tajweed && tj) for (let k = a; k < Math.min(b, end); k++) if (tj[k]) { sum = 1; t = TJ_TYPE[tj[k]]; break; }
       if (sum >= 1) return { state: decided ? 'err' : 'hear', type: TYPES[t], heard: heardTxt, at, span };
       return { state: decided ? 'ok' : 'hear', heard: heardTxt, at };
     });
@@ -454,6 +470,8 @@ const Match = (() => {
   // a madd's kind, from what follows it: 'arid' (before the aya's last letter, at the stop:
   // 2, 4 or 6 all right), 'muttasil' (a hamza in its word), 'munfasil' (a hamza starting
   // the next word), 'lazim' (a sukun or shadda after it), else 'tabii' (two counts)
+  // the unit is its word's last (or the haraka before it): where a stop changes a word's end
+  const wordEnd = (W, k) => W.some(([a, b]) => k >= a && k < b && k + 2 >= b);
   function maddKind(E, W, k, ends) {
     const w = W.findIndex(([a, b]) => k >= a && k < b), [, b] = W[w] || [0, E.length];
     if ((ends ? ends.has(w) : w === W.length - 1) && k + 2 >= b) return 'arid';
@@ -468,7 +486,12 @@ const Match = (() => {
   //   madd: a natural madd said short (as its haraka alone), a muttasil or lazim said natural
   //   ghunna: a ghunna (idgham, ikhfa, iqlab, a doubled ن/م) said without its length
   // skip: expected units where correct reciters are heard otherwise (data/tj-*.json)
-  const TJ_MADD = 1, TJ_GHUNNA = 2, TJ_SURE = 0.8;
+  //   over (the madd beyond its length, the study: correct reciters hold a natural madd 3 counts or
+  //   more 0.08% of the time, and give a short vowel a madd of 2 or more 0.01%):
+  //     a natural madd inside a word held 3 counts or more (at a word's end it may be a stop: left)
+  //     a short vowel inside a word drawn out into a madd of 2 or more
+  const TJ_MADD = 1, TJ_GHUNNA = 2, TJ_LONG = 3, TJ_NONE = 4, TJ_SURE = 0.8;
+  const TJ_TYPE = [0, 5, 6, 9, 10]; // the mistake type (TYPES) of each
   // rules: { madd, ghunna, munfasil } which are checked (munfasil: held 4, not read short with qasr)
   function tajweed(E, Elen, W, H, Hlen, Hc, al, pos, end, onTj, skip, ends, rules = { madd: true, ghunna: true }) {
     const out = new Uint8Array(E.length), sure = i => !Hc || Hc[i] >= TJ_SURE;
@@ -478,9 +501,10 @@ const Match = (() => {
       onTj?.('madd-' + kind, Elen[k], hl, i >= 0 && Hc ? Hc[i] : 1, k);
       // the sound before it heard (its haraka, its letter): the word was said here
       const around = k > 0 && al[k - 1] && sure(pos[k - 1]);
-      if (!rules.madd) continue;
-      if (kind === 'tabii' && hl <= 1 && around && (i < 0 || sure(i))) out[k] = TJ_MADD;
-      if ((kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= 2 && i >= 0 && sure(i)) out[k] = TJ_MADD;
+      if (!rules.madd && !rules.over) continue;
+      if (rules.madd && kind === 'tabii' && hl <= 1 && around && (i < 0 || sure(i))) out[k] = TJ_MADD;
+      if (rules.over && kind === 'tabii' && hl >= 3 && i >= 0 && sure(i) && !wordEnd(W, k)) out[k] = TJ_LONG;
+      if (rules.madd && (kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= 2 && i >= 0 && sure(i)) out[k] = TJ_MADD;
       if (out[k]) onTj?.('flag', out[k], hl, 0, k);
     }
     for (let k = 0; k < Math.min(end, E.length);) {
@@ -498,6 +522,18 @@ const Match = (() => {
         if (ok && gh <= 1) { out[k] = TJ_GHUNNA; onTj?.('flag', TJ_GHUNNA, gh, 0, k); }
       }
       k = e;
+    }
+    // a madd where there is none: heard, lined up with nothing, after a short vowel inside a word
+    if (rules.over) {
+      const took = new Uint8Array(H.length);
+      let last = -1;
+      for (let k = 0; k < Math.min(end, E.length); k++) if (al[k] && pos[k] >= 0) { took[pos[k]] = 1; last = Math.max(last, pos[k]); }
+      for (let i = 0, k = -1; i <= last; i++) {
+        while (k + 1 < Math.min(end, E.length) && (!al[k + 1] || pos[k + 1] < i)) k++; // the expected unit before it
+        if (took[i] || !MADDS.has(H[i]) || Hlen[i] < 2 || !sure(i) || k < 0 || !al[k] || !ISHAR[E[k]]) continue;
+        if (k + 1 >= E.length || wordEnd(W, k) || MADDS.has(E[k + 1]) || skip?.has(k)) continue;
+        if (!out[k]) { out[k] = TJ_NONE; onTj?.('flag', TJ_NONE, Hlen[i], 0, k); }
+      }
     }
     // idgham without ghunna (مِن رَّبِّهِم: مِرَّبِّ): the ن said where it merges into the doubled ل or ر
     for (let k = 1; k + 1 < Math.min(end, E.length); k++) {
