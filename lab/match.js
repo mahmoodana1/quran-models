@@ -64,6 +64,9 @@ const Match = (() => {
   const cost1 = ([c, t]) => [c, TYPES.indexOf(t)];
   [...'ءبتثجحخدذرزسشصضطظعغفقكلمنهويا' + 'ۦۥَُِ۪ـٲڇں۾ؙۜ'].forEach(id);
   const NUN = id('ن'), HAMZA = id('ء'), LAM = id('ل'), RA = id('ر'), MIM = id('م'), GH = id('ں'), YA = id('ي'), WAW = id('و');
+  // a long ī or ū heard as ay or aw (طِين as طَين): how the model hears some voices, never a reader's
+  // mistake. The vowel before the madd, heard as fatha with the madd as a consonant: not marked
+  const FATHA = id('َ'), DIPH = new Map([[id('ِ'), [id('ۦ'), YA]], [id('ُ'), [id('ۥ'), WAW]]]);
   // letters the model tells apart (heard as the other with confidence, by correct reciters: under 0.1%
   // of the time, the study), each a mistake of its own with opt.letters: a heavy letter said light
   // or the other way (heavy), and letters near in sound (near). Not ت/ث nor ث/س (the model confuses
@@ -278,7 +281,8 @@ const Match = (() => {
       if (b === 1 || b === 2) seen[j - 1] = 1;
       if (b === 1) {
         const x = E[j - 1] * K + H[i - 1];
-        const fine = unsure(i - 1) || runnerUp(i - 1, E[j - 1]);
+        const dp = DIPH.get(E[j - 1]);
+        const fine = unsure(i - 1) || runnerUp(i - 1, E[j - 1]) || (dp && H[i - 1] === FATHA && j < m && i < n && E[j] === dp[0] && H[i] === dp[1]);
         if (SUBT[x] && subc(j - 1, H[i - 1]) === SUBC[x] && !fine) { bad[j - 1] += SUBC[x]; type[j - 1] ||= SUBT[x]; }
         else if (opt.letters && !fine && (!Hc || Hc[i - 1] >= LETTER_OFTEN)) {
           const pk = CH[E[j - 1]] + CH[H[i - 1]], pt = PAIR.get(pk), e0 = E[j - 1], c = Hc ? Hc[i - 1] : 1;
@@ -595,7 +599,9 @@ const Match = (() => {
       const after = k + 1 < E.length && al[k + 1] && sure(pos[k + 1]);
       if (kind === 'tabii' && around && (i < 0 || sure(i)) && !wordEnd(W, k)) rules.seen?.(k, hl, hl && Hdur ? Hdur[i] : -1);
       if (!rules.madd && !rules.over) continue;
-      if (rules.madd && L.miss && kind === 'tabii' && !hl && around && after && (i < 0 || sure(i))) out[k] = TJ_MADD;
+      // (ī or ū heard as ay or aw: the madd heard as its letter, said)
+      const diph = i >= 0 && k > 0 && DIPH.get(E[k - 1])?.[0] === E[k] && H[i] === DIPH.get(E[k - 1])[1];
+      if (rules.madd && L.miss && kind === 'tabii' && !hl && !diph && around && after && (i < 0 || sure(i))) out[k] = TJ_MADD;
       if (rules.over && kind === 'tabii' && hl >= L.long && i >= 0 && sure(i) && !wordEnd(W, k) && atLeast(i, 1.75)) out[k] = TJ_LONG;
       if (rules.madd && (kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= (L.t && Hdur ? L.short : 1) && i >= 0 && sure(i) && under(i, 1.25)) out[k] = TJ_MADD;
       if (out[k]) onTj?.('flag', out[k], hl, 0, k);
