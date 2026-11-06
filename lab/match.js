@@ -116,6 +116,7 @@ const Match = (() => {
   // opt.freeStart: the reading may begin at any word (those before it: state 'pre')
   // opt.conf: how sure the model was of each heard character (0..1); a mismatch
   // on a sound it was unsure of is taken for a mishearing, never a mistake
+  // opt.at: per heard character, the frame it starts on (a madd's time: see tajweed())
   // opt.alts: per heard character, the other sounds the model gave a fair chance
   // (a string, or { sound: chance }); when the expected sound is one, it counts as heard
   // expected.refs (optional): per word, how real reciters reading it right were
@@ -154,6 +155,16 @@ const Match = (() => {
     // each heard unit's length (a madd's, or ں's, run)
     const Hlen = new Uint8Array(H.length);
     { let u = -1, prev = null; for (const c of heard) { if (!(MADD.has(c) && c === prev)) u++; Hlen[u] = Math.min(255, Hlen[u] + 1); prev = c; } }
+    // (opt.at: the frame each heard character starts on) each heard unit's length in time, to the
+    // next one's start (-1: the last, or not known)
+    let Hdur = null;
+    if (opt.at) {
+      Hdur = new Int16Array(H.length).fill(-1);
+      let u = -1, prev = null, c = 0;
+      const st = [];
+      for (const ch of heard) { if (!(MADD.has(ch) && ch === prev)) st[++u] = opt.at[c]; prev = ch; c++; }
+      for (let i = 0; i + 1 < st.length; i++) if (st[i] != null && st[i + 1] != null) Hdur[i] = Math.min(32767, st[i + 1] - st[i]);
+    }
     const hFinal = units(heard.slice(0, finalLen)).length;
     grow();
     const n = H.length, m = E.length, W = m + 1;
@@ -277,7 +288,7 @@ const Match = (() => {
       }
     }
     const refs = expected.refs;
-    const tj = opt.tajweed || opt.onTj ? tajweed(E, expected._len, expected._w, H, Hlen, Hc, al, pos, end, opt.onTj, opt.tjSkip || expected._tj, expected.ends ? new Set(expected.ends) : null, typeof opt.tajweed === 'object' ? opt.tajweed : undefined) : null;
+    const tj = opt.tajweed || opt.onTj ? tajweed(E, expected._len, expected._w, H, Hlen, Hc, al, pos, end, opt.onTj, opt.tjSkip || expected._tj, expected.ends ? new Set(expected.ends) : null, typeof opt.tajweed === 'object' ? opt.tajweed : undefined, Hdur) : null;
     const out = expected._w.map(([a, b], wi) => {
       if (b <= start) return { state: 'pre' };
       if (a >= end) return { state: 'todo' };
@@ -497,20 +508,43 @@ const Match = (() => {
   // 2, often enough that those were marked in correct readings; so a natural madd is short only when
   // not heard at all (the professionals' are heard 1 count 17% of the time)
   const OVER_LONG = 4, OVER_NONE = 3;
+  // and each reader holds a madd their own length (and the model hears a fast reader's shorter):
+  // rules.pace { u: how long this reader's natural madd is heard (its middle), z: how often it is
+  // heard as nothing, n: how many measured }, from their own readings (recite.js), the limits
+  // set from it: too long only from twice their natural madd and more (5 for one of 2), a
+  // muttasil or lazim short only as short as their natural one, a short vowel drawn out only
+  // from 2 beyond their natural madd; a natural madd missing only for a reader the model
+  // seldom hears so (some readers' come out as nothing often, said right)
+  // And in time (the model may write one reader's 2 counts and another's 4 alike): p.t, how long
+  // this reader's natural madd is held (frames, p.tn measured); a madd is then marked only when
+  // its time says so too: too long only if held 1¾ times their natural one or more, a muttasil or
+  // lazim short only if held under 1½ times it, a short vowel drawn out only if held as long
+  // rules.seen(k, hl, d): each natural madd inside a word, as heard, and its time (for the pace)
+  const PACE_N = 30;
+  function limits(p) {
+    const u = p && p.n >= PACE_N ? Math.min(3, Math.max(1, p.u)) : 2, z = p && p.n >= PACE_N ? p.z : 0;
+    return { long: Math.max(OVER_LONG + 1, Math.round(2 * u) + 1), short: Math.min(2, Math.round(u)), none: Math.max(OVER_NONE + 1, Math.round(u) + 2), miss: z < 0.12, t: p && p.tn >= PACE_N ? p.t : 0 };
+  }
   const TJ_TYPE = [0, 5, 6, 9, 10]; // the mistake type (TYPES) of each
   // rules: { madd, ghunna, munfasil } which are checked (munfasil: held 4, not read short with qasr)
-  function tajweed(E, Elen, W, H, Hlen, Hc, al, pos, end, onTj, skip, ends, rules = { madd: true, ghunna: true }) {
-    const out = new Uint8Array(E.length), sure = i => !Hc || Hc[i] >= TJ_SURE;
+  function tajweed(E, Elen, W, H, Hlen, Hc, al, pos, end, onTj, skip, ends, rules = { madd: true, ghunna: true }, Hdur = null) {
+    const out = new Uint8Array(E.length), sure = i => !Hc || Hc[i] >= TJ_SURE, L = limits(rules.pace);
+    // held (in this reader's natural madds) at least x times / under x times; not known: as the letters say
+    const held = i => L.t && Hdur && Hdur[i] > 0 ? Hdur[i] / L.t : null;
+    const atLeast = (i, x) => { const r = held(i); return r == null || r >= x; }, under = (i, x) => { const r = held(i); return r == null || r < x; };
     for (let k = 0; k < Math.min(end, E.length); k++) {
       if (!MADDS.has(E[k]) || Elen[k] < 2 || skip?.has(k)) continue;
       const kind = maddKind(E, W, k, ends), i = al[k] ? pos[k] : -1, hl = i >= 0 && MADDS.has(H[i]) ? Hlen[i] : 0;
       onTj?.('madd-' + kind, Elen[k], hl, i >= 0 && Hc ? Hc[i] : 1, k);
       // the sound before it heard (its haraka, its letter): the word was said here
       const around = k > 0 && al[k - 1] && sure(pos[k - 1]);
+      // (and the sound after it: the madd between two heard surely)
+      const after = k + 1 < E.length && al[k + 1] && sure(pos[k + 1]);
+      if (kind === 'tabii' && around && (i < 0 || sure(i)) && !wordEnd(W, k)) rules.seen?.(k, hl, hl && Hdur ? Hdur[i] : -1);
       if (!rules.madd && !rules.over) continue;
-      if (rules.madd && kind === 'tabii' && !hl && around && (i < 0 || sure(i))) out[k] = TJ_MADD;
-      if (rules.over && kind === 'tabii' && hl >= OVER_LONG && i >= 0 && sure(i) && !wordEnd(W, k)) out[k] = TJ_LONG;
-      if (rules.madd && (kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= 2 && i >= 0 && sure(i)) out[k] = TJ_MADD;
+      if (rules.madd && L.miss && kind === 'tabii' && !hl && around && after && (i < 0 || sure(i))) out[k] = TJ_MADD;
+      if (rules.over && kind === 'tabii' && hl >= L.long && i >= 0 && sure(i) && !wordEnd(W, k) && atLeast(i, 1.75)) out[k] = TJ_LONG;
+      if (rules.madd && (kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= L.short && i >= 0 && sure(i) && under(i, 1.5)) out[k] = TJ_MADD;
       if (out[k]) onTj?.('flag', out[k], hl, 0, k);
     }
     for (let k = 0; k < Math.min(end, E.length);) {
@@ -536,9 +570,9 @@ const Match = (() => {
       for (let k = 0; k < Math.min(end, E.length); k++) if (al[k] && pos[k] >= 0) { took[pos[k]] = 1; last = Math.max(last, pos[k]); }
       for (let i = 0, k = -1; i <= last; i++) {
         while (k + 1 < Math.min(end, E.length) && (!al[k + 1] || pos[k + 1] < i)) k++; // the expected unit before it
-        if (took[i] || !MADDS.has(H[i]) || Hlen[i] < OVER_NONE || !sure(i) || k < 0 || !al[k] || !ISHAR[E[k]]) continue;
+        if (took[i] || !MADDS.has(H[i]) || Hlen[i] < L.none || !sure(i) || k < 0 || !al[k] || !ISHAR[E[k]]) continue;
         if (k + 1 >= E.length || wordEnd(W, k) || MADDS.has(E[k + 1]) || skip?.has(k)) continue;
-        if (!out[k]) { out[k] = TJ_NONE; onTj?.('flag', TJ_NONE, Hlen[i], 0, k); }
+        if (!out[k] && atLeast(i, 1)) { out[k] = TJ_NONE; onTj?.('flag', TJ_NONE, Hlen[i], 0, k); }
       }
     }
     // idgham (مِن رَّبِّهِم: مِرَّبِّ, without ghunna; مَن يَقُولُ: مَيييَقُول and مِن وَالٍ: مِووَال, with it):
