@@ -68,13 +68,13 @@ const Match = (() => {
   // of the time, the study), each a mistake of its own with opt.letters: a heavy letter said light
   // or the other way (heavy), and letters near in sound (near). Not ت/ث nor ث/س (the model confuses
   // them, and readers' ث differ), nor ن/م inside a ghunna or at a stop, where the two sound alike.
-  // Only when the model heard the other letter all but surely (LETTER_SURE; ت/ط surer still), or
-  // fairly surely (LETTER_OFTEN) when this reader has said it so before in the session: the
-  // reader's tells it opt.letters.often(pair), and hears of each one so (opt.letters.heard(pair, unit))
+  // Only when the model heard the other letter all but surely (LETTER_SURE), or fairly surely
+  // (LETTER_OFTEN) when this reader says it so twice or more in the session: the caller tells it
+  // opt.letters.often(pair), and hears of each one so first (opt.letters.heard(pair, unit))
   const HEAVY = ['سص', 'تط', 'دض', 'ذظ', 'زظ', 'قك'], CLOSE = ['من', 'هح', 'ءع', 'ذز'];
   const PAIR = new Map(); // 'ab' -> 7 heavy | 8 near
   for (const [g, t] of [[HEAVY, 7], [CLOSE, 8]]) for (const q of g) { PAIR.set(q, t); PAIR.set(q[1] + q[0], t); }
-  const LETTER_SURE = 0.95, TA_SURE = 0.99, LETTER_OFTEN = 0.8;
+  const LETTER_SURE = 0.99, TA_SURE = 0.99, LETTER_OFTEN = 0.8;
   const TA = new Set(['تط', 'طت']);
 
   function sub(a, b) {
@@ -661,6 +661,6 @@ const Match = (() => {
     return s.length;
   }
 
-  return { words, units, unitConf, unitAlts, charAt, text: u => u.map(i => CH[i]).join('') };
+  return { words, units, unitConf, unitAlts, charAt, text: u => u.map(i => CH[i]).join(''), pairType: pk => TYPES[PAIR.get(pk)] };
 })();
 if (typeof module !== 'undefined') module.exports = Match;
