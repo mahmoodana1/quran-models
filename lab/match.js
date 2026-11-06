@@ -70,11 +70,15 @@ const Match = (() => {
   // them, and readers' ث differ), nor ن/م inside a ghunna or at a stop, where the two sound alike.
   // Only when the model heard the other letter all but surely (LETTER_SURE), or fairly surely
   // (LETTER_OFTEN) when this reader says it so twice or more in the session: the caller tells it
-  // opt.letters.often(pair), and hears of each one so first (opt.letters.heard(pair, unit))
+  // opt.letters.often(pair, times = 2), and hears of each one so first (opt.letters.heard(pair, unit))
   const HEAVY = ['سص', 'تط', 'دض', 'ذظ', 'زظ', 'قك'], CLOSE = ['من', 'هح', 'ءع', 'ذز'];
   const PAIR = new Map(); // 'ab' -> 7 heavy | 8 near
   for (const [g, t] of [[HEAVY, 7], [CLOSE, 8]]) for (const q of g) { PAIR.set(q, t); PAIR.set(q[1] + q[0], t); }
   const LETTER_SURE = 0.99, TA_SURE = 0.99, LETTER_OFTEN = 0.8;
+  // letters near in sound (ء/ع, ه/ح, …) said quickly blur into each other, for the model as for the ear:
+  // never marked on one hearing, only from the NEAR_OFTEN-th time in the session, and not at all
+  // where the reading around it goes faster than NEAR_FAST frames (40 ms) a sound
+  const NEAR_OFTEN = 3, NEAR_FAST = 4;
   const TA = new Set(['تط', 'طت']);
 
   function sub(a, b) {
@@ -170,6 +174,14 @@ const Match = (() => {
       for (const ch of heard) { if (!(MADD.has(ch) && ch === prev)) st[++u] = opt.at[c]; prev = ch; c++; }
       for (let i = 0; i + 1 < st.length; i++) if (st[i] != null && st[i + 1] != null) Hdur[i] = Math.min(32767, st[i + 1] - st[i]);
     }
+    // how fast the reading goes around heard unit i: the frames a sound takes, over the four
+    // either side (madds and pauses left out); not known: not fast
+    const fast = i => {
+      if (!Hdur) return false;
+      let t = 0, k = 0;
+      for (let x = Math.max(0, i - 4); x <= Math.min(H.length - 1, i + 4); x++) if (Hdur[x] > 0 && Hdur[x] <= 12 && !ISMADD[H[x]]) { t += Hdur[x]; k++; }
+      return k >= 4 && t / k < NEAR_FAST;
+    };
     const hFinal = units(heard.slice(0, finalLen)).length;
     grow();
     const n = H.length, m = E.length, W = m + 1;
@@ -272,8 +284,13 @@ const Match = (() => {
           const pk = CH[E[j - 1]] + CH[H[i - 1]], pt = PAIR.get(pk), e0 = E[j - 1], c = Hc ? Hc[i - 1] : 1;
           const nasal = (e0 === NUN || e0 === MIM) && (edge[j - 1] === 1 || (j > 1 && (NASAL.has(E[j - 2]))) || (j < m && NASAL.has(E[j])) || (i > 1 && H[i - 2] === GH) || (i < n && (H[i] === GH || NASAL.has(H[i]))));
           if (pt && (pt === 7 ? opt.letters.heavy : opt.letters.near) && !nasal) {
-            opt.letters.heard?.(pk, j - 1);
-            if (c >= (TA.has(pk) ? TA_SURE : LETTER_SURE) || opt.letters.often?.(pk)) { bad[j - 1] += 1; type[j - 1] ||= pt; }
+            if (pt === 7) {
+              opt.letters.heard?.(pk, j - 1);
+              if (c >= (TA.has(pk) ? TA_SURE : LETTER_SURE) || opt.letters.often?.(pk)) { bad[j - 1] += 1; type[j - 1] ||= pt; }
+            } else if (!fast(i - 1)) {
+              opt.letters.heard?.(pk, j - 1);
+              if (opt.letters.often?.(pk, NEAR_OFTEN)) { bad[j - 1] += 1; type[j - 1] ||= pt; }
+            }
           }
         }
         // heard as itself, or as a sound it is confused with; a sound the model was unsure of
