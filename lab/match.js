@@ -100,6 +100,7 @@ const Match = (() => {
   const PAUSE = 0.25; // what a pause between words changes: not reported
   const LEAD = 0.3;   // each sound heard before the aya begins, with opt.freeLead (less than a wrong letter)
   const UNSURE = 0.75; // below this confidence, a heard sound is not trusted to show a mistake (0.6 marked twice as many words in a noisy room, for the same mistakes caught)
+  const SHORT_SURE = 0.9; // a short word's haraka marked wrong only when heard this surely
   const ALT_MIN = 0.1; // a runner-up sound given at least this chance
   const WSKIP = 1.8; // a whole word left out costs at most this, however long (a long word skipped
   // otherwise costs so much that any fuzzy reading of what was heard explains it better; the
@@ -306,10 +307,16 @@ const Match = (() => {
         if (LET[E[k]]) { lets++; lhits += hit[k]; }
       }
       let sum = 0, t = 0;
+      // a short word (إِن، لَا، مِن، أَلَا: a few sounds, said quickly, joined into the next by
+      // idgham, or first after a pause where its hamza is soft): one of its sounds not heard is
+      // the model's, not the reader's, when the rest were; and a haraka in it wrong only if heard surely
+      const short = len <= 4, most = hits >= len - 1;
+      let harSure = !short;
+      if (short && har >= 1) for (let k = a; k < Math.min(b, end); k++) if (type[k] === 1 && pos[k] >= 0 && (!Hc || Hc[pos[k]] >= SHORT_SURE)) harSure = true;
       if (b <= end && b > a && hits * 3 < len) { sum = 1; t = 3; } // most of the word not heard at all: left out
-      else if (letc >= 1.2 && (lhits < lets * 0.5 || letc >= 2.4)) { sum = letc; t = tl || 2; }
+      else if (letc >= 1.2 && (lhits < lets * 0.5 || letc >= 2.4) && !(short && most)) { sum = letc; t = tl || 2; }
       else if (sim >= 1) { sum = sim; t = st; }
-      else if (har >= 1) { sum = har; t = 1; }
+      else if (har >= 1 && harSure) { sum = har; t = 1; }
       const at = [pos[a], Math.min(b, end) > a ? pos[Math.min(b, end) - 1] + 1 : pos[a]]; // where in the heard units
       if (b > end) return { state: 'hear', heard: heardTxt, at };
       // what was heard for it: from its first sound heard to its last (its first may be the one left out)
@@ -366,9 +373,30 @@ const Match = (() => {
   // tried on the few words about the pair only, and what was heard for them: a whole window
   // read again for each pair tried made a slow phone's page freeze where mistakes were many
   const SWAP_AROUND = 2;
+  // a short word "left out" between two said right, with sounds heard between them: said, quickly
+  // (the model's garble of it); one really left out leaves next to nothing between its neighbours.
+  // After the swap is looked for (a word said elsewhere is first marked left out)
+  function quick(expected, st, heard) {
+    let out = st, H = null;
+    for (let wi = 1; wi + 1 < st.length; wi++) {
+      const x = st[wi], p = st[wi - 1], q = st[wi + 1], [a, b] = expected._w[wi];
+      if (x.type !== 'missing' || p.state !== 'ok' || q.state !== 'ok' || !p.at || !q.at || b - a > 4) continue;
+      const g0 = p.at[1], g1 = q.at[0];
+      if (g1 - g0 < Math.max(2, b - a - 1) || g1 - g0 > b - a + 2) continue;
+      // (and like it: a letter of it among them, not another word said in its place)
+      H ||= units(heard);
+      const gap = H.slice(g0, g1), E = expected._u;
+      let like = false;
+      for (let k = a; k < b && !like; k++) if (LET[E[k]]) like = gap.some(h => h === E[k] || alike.has(CH[E[k]] + CH[h]));
+      if (!like) continue;
+      if (out === st) { out = st.slice(); out.cost = st.cost; }
+      out[wi] = { state: x.state === 'err' ? 'ok' : x.state, heard: x.heard, at: x.at };
+    }
+    return out;
+  }
   function words(expected, heard, finalLen = heard.length, done = false, opt = {}) {
     const st = core(expected, heard, finalLen, done, opt);
-    if (opt.noSwap || expected.spans.length < 2) return st;
+    if (opt.noSwap || expected.spans.length < 2) return opt.noSwap ? st : quick(expected, st, heard);
     const ends = expected.ends ? new Set(expected.ends) : null, ph = expected.ph, sp = expected.spans;
     const word = i => ph.slice(sp[i][0], sp[i][1]);
     const said = i => (st[i].state === 'ok' || st[i].state === 'err') && st[i].at;
@@ -378,7 +406,7 @@ const Match = (() => {
       for (const v of [k - 1, k]) if (v >= 0 && v + 1 < sp.length && !pairs.includes(v) && !ends?.has(v)
         && sp[v][1] > sp[v][0] && sp[v + 1][1] > sp[v + 1][0] && word(v) !== word(v + 1) && said(v) && said(v + 1)) pairs.push(v);
     });
-    if (!pairs.length) return st;
+    if (!pairs.length) return quick(expected, st, heard);
     const H = units(heard);
     let out = null;
     for (const v of pairs.slice(0, SWAP_TRY)) {
@@ -408,9 +436,9 @@ const Match = (() => {
         out[i] = i === v || i === v + 1 ? { state: 'err', type: 'order', heard: x.heard, at: x.at, span: x.at } : x;
       }
     }
-    if (!out) return st;
+    if (!out) return quick(expected, st, heard);
     out.cost = st.cost;
-    return out;
+    return quick(expected, out, heard);
   }
 
   // two hearings of one word: alike, by the same costs (similar letters, madd,
