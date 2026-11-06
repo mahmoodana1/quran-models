@@ -66,12 +66,16 @@ const Match = (() => {
   const NUN = id('ن'), HAMZA = id('ء'), LAM = id('ل'), RA = id('ر'), MIM = id('م'), GH = id('ں'), YA = id('ي'), WAW = id('و');
   // letters the model tells apart (heard as the other with confidence, by correct reciters: under 0.1%
   // of the time, the study), each a mistake of its own with opt.letters: a heavy letter said light
-  // or the other way (heavy), and letters near in sound (near). Not ت/ث (the model confuses them),
-  // nor ن/م inside a ghunna or at a stop, where the two sound alike.
-  const HEAVY = ['سص', 'تط', 'دض', 'ذظ', 'زظ', 'قك'], CLOSE = ['من', 'هح', 'ءع', 'ذز', 'ثس'];
+  // or the other way (heavy), and letters near in sound (near). Not ت/ث nor ث/س (the model confuses
+  // them, and readers' ث differ), nor ن/م inside a ghunna or at a stop, where the two sound alike.
+  // Only when the model heard the other letter all but surely (LETTER_SURE; ت/ط surer still), or
+  // fairly surely (LETTER_OFTEN) when this reader has said it so before in the session: the
+  // reader's tells it opt.letters.often(pair), and hears of each one so (opt.letters.heard(pair, unit))
+  const HEAVY = ['سص', 'تط', 'دض', 'ذظ', 'زظ', 'قك'], CLOSE = ['من', 'هح', 'ءع', 'ذز'];
   const PAIR = new Map(); // 'ab' -> 7 heavy | 8 near
   for (const [g, t] of [[HEAVY, 7], [CLOSE, 8]]) for (const q of g) { PAIR.set(q, t); PAIR.set(q[1] + q[0], t); }
-  const LETTER_SURE = 0.9;
+  const LETTER_SURE = 0.95, TA_SURE = 0.99, LETTER_OFTEN = 0.8;
+  const TA = new Set(['تط', 'طت']);
 
   function sub(a, b) {
     if (a[0] === b[0]) return [0, null];
@@ -264,10 +268,13 @@ const Match = (() => {
         const x = E[j - 1] * K + H[i - 1];
         const fine = unsure(i - 1) || runnerUp(i - 1, E[j - 1]);
         if (SUBT[x] && subc(j - 1, H[i - 1]) === SUBC[x] && !fine) { bad[j - 1] += SUBC[x]; type[j - 1] ||= SUBT[x]; }
-        else if (opt.letters && !fine && (!Hc || Hc[i - 1] >= LETTER_SURE)) {
-          const pt = PAIR.get(CH[E[j - 1]] + CH[H[i - 1]]), e0 = E[j - 1];
+        else if (opt.letters && !fine && (!Hc || Hc[i - 1] >= LETTER_OFTEN)) {
+          const pk = CH[E[j - 1]] + CH[H[i - 1]], pt = PAIR.get(pk), e0 = E[j - 1], c = Hc ? Hc[i - 1] : 1;
           const nasal = (e0 === NUN || e0 === MIM) && (edge[j - 1] === 1 || (j > 1 && (NASAL.has(E[j - 2]))) || (j < m && NASAL.has(E[j])) || (i > 1 && H[i - 2] === GH) || (i < n && (H[i] === GH || NASAL.has(H[i]))));
-          if (pt && (pt === 7 ? opt.letters.heavy : opt.letters.near) && !nasal) { bad[j - 1] += 1; type[j - 1] ||= pt; }
+          if (pt && (pt === 7 ? opt.letters.heavy : opt.letters.near) && !nasal) {
+            opt.letters.heard?.(pk, j - 1);
+            if (c >= (TA.has(pk) ? TA_SURE : LETTER_SURE) || opt.letters.often?.(pk)) { bad[j - 1] += 1; type[j - 1] ||= pt; }
+          }
         }
         // heard as itself, or as a sound it is confused with; a sound the model was unsure of
         // excuses a mismatch, but doesn't count as the unit heard (a long madd held into the
@@ -546,7 +553,8 @@ const Match = (() => {
   // And in time (the model may write one reader's 2 counts and another's 4 alike): p.t, how long
   // this reader's natural madd is held (frames, p.tn measured); a madd is then marked only when
   // its time says so too: too long only if held 1¾ times their natural one or more, a muttasil or
-  // lazim short only if held under 1½ times it, a short vowel drawn out only if held as long
+  // lazim short only if held under 1¼ times it (3 counts to 6 all right: under 2½ is short; with
+  // no time measured yet, only when heard 1 letter), a short vowel drawn out only if held as long
   // rules.seen(k, hl, d): each natural madd inside a word, as heard, and its time (for the pace)
   const PACE_N = 30;
   function limits(p) {
@@ -572,7 +580,7 @@ const Match = (() => {
       if (!rules.madd && !rules.over) continue;
       if (rules.madd && L.miss && kind === 'tabii' && !hl && around && after && (i < 0 || sure(i))) out[k] = TJ_MADD;
       if (rules.over && kind === 'tabii' && hl >= L.long && i >= 0 && sure(i) && !wordEnd(W, k) && atLeast(i, 1.75)) out[k] = TJ_LONG;
-      if (rules.madd && (kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= L.short && i >= 0 && sure(i) && under(i, 1.5)) out[k] = TJ_MADD;
+      if (rules.madd && (kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= (L.t && Hdur ? L.short : 1) && i >= 0 && sure(i) && under(i, 1.25)) out[k] = TJ_MADD;
       if (out[k]) onTj?.('flag', out[k], hl, 0, k);
     }
     for (let k = 0; k < Math.min(end, E.length);) {
