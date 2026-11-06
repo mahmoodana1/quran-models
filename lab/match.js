@@ -483,14 +483,18 @@ const Match = (() => {
   // the rules checked (what correct reciters do, from the study: a natural madd is heard
   // 2 counts, a muttasil 4, a ghunna 3 or 4; the munfasil (4, or 2 read with qasr) and a
   // madd at the stop (2, 4 or 6) are left to the reader):
-  //   madd: a natural madd said short (as its haraka alone), a muttasil or lazim said natural
+  //   madd: a natural madd not said (its haraka alone), a muttasil or lazim said natural
   //   ghunna: a ghunna (idgham, ikhfa, iqlab, a doubled ن/م) said without its length
   // skip: expected units where correct reciters are heard otherwise (data/tj-*.json)
   //   over (the madd beyond its length, the study: correct reciters hold a natural madd 3 counts or
   //   more 0.08% of the time, and give a short vowel a madd of 2 or more 0.01%):
-  //     a natural madd inside a word held 3 counts or more (at a word's end it may be a stop: left)
-  //     a short vowel inside a word drawn out into a madd of 2 or more
+  //     a natural madd inside a word held OVER_LONG counts or more (at a word's end it may be a stop: left)
+  //     a short vowel inside a word drawn out into a madd of OVER_NONE or more
   const TJ_MADD = 1, TJ_GHUNNA = 2, TJ_LONG = 3, TJ_NONE = 4, TJ_SURE = 0.8;
+  // how far off it must be: readers of tarteel (not the study's professionals) say a natural madd
+  // anywhere from 1 count to 4, and give a short vowel 2, often enough that those were marked in
+  // correct readings; so a natural madd is short only when not heard at all
+  const OVER_LONG = 5, OVER_NONE = 3;
   const TJ_TYPE = [0, 5, 6, 9, 10]; // the mistake type (TYPES) of each
   // rules: { madd, ghunna, munfasil } which are checked (munfasil: held 4, not read short with qasr)
   function tajweed(E, Elen, W, H, Hlen, Hc, al, pos, end, onTj, skip, ends, rules = { madd: true, ghunna: true }) {
@@ -502,8 +506,8 @@ const Match = (() => {
       // the sound before it heard (its haraka, its letter): the word was said here
       const around = k > 0 && al[k - 1] && sure(pos[k - 1]);
       if (!rules.madd && !rules.over) continue;
-      if (rules.madd && kind === 'tabii' && hl <= 1 && around && (i < 0 || sure(i))) out[k] = TJ_MADD;
-      if (rules.over && kind === 'tabii' && hl >= 3 && i >= 0 && sure(i) && !wordEnd(W, k)) out[k] = TJ_LONG;
+      if (rules.madd && kind === 'tabii' && !hl && around && (i < 0 || sure(i))) out[k] = TJ_MADD;
+      if (rules.over && kind === 'tabii' && hl >= OVER_LONG && i >= 0 && sure(i) && !wordEnd(W, k)) out[k] = TJ_LONG;
       if (rules.madd && (kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= 2 && i >= 0 && sure(i)) out[k] = TJ_MADD;
       if (out[k]) onTj?.('flag', out[k], hl, 0, k);
     }
@@ -530,7 +534,7 @@ const Match = (() => {
       for (let k = 0; k < Math.min(end, E.length); k++) if (al[k] && pos[k] >= 0) { took[pos[k]] = 1; last = Math.max(last, pos[k]); }
       for (let i = 0, k = -1; i <= last; i++) {
         while (k + 1 < Math.min(end, E.length) && (!al[k + 1] || pos[k + 1] < i)) k++; // the expected unit before it
-        if (took[i] || !MADDS.has(H[i]) || Hlen[i] < 2 || !sure(i) || k < 0 || !al[k] || !ISHAR[E[k]]) continue;
+        if (took[i] || !MADDS.has(H[i]) || Hlen[i] < OVER_NONE || !sure(i) || k < 0 || !al[k] || !ISHAR[E[k]]) continue;
         if (k + 1 >= E.length || wordEnd(W, k) || MADDS.has(E[k + 1]) || skip?.has(k)) continue;
         if (!out[k]) { out[k] = TJ_NONE; onTj?.('flag', TJ_NONE, Hlen[i], 0, k); }
       }
