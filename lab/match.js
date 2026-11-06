@@ -63,7 +63,7 @@ const Match = (() => {
   }
   const cost1 = ([c, t]) => [c, TYPES.indexOf(t)];
   [...'ءبتثجحخدذرزسشصضطظعغفقكلمنهويا' + 'ۦۥَُِ۪ـٲڇں۾ؙۜ'].forEach(id);
-  const NUN = id('ن'), HAMZA = id('ء'), LAM = id('ل'), RA = id('ر'), MIM = id('م'), GH = id('ں');
+  const NUN = id('ن'), HAMZA = id('ء'), LAM = id('ل'), RA = id('ر'), MIM = id('م'), GH = id('ں'), YA = id('ي'), WAW = id('و');
   // letters the model tells apart (heard as the other with confidence, by correct reciters: under 0.1%
   // of the time, the study), each a mistake of its own with opt.letters: a heavy letter said light
   // or the other way (heavy), and letters near in sound (near). Not ت/ث (the model confuses them),
@@ -474,7 +474,8 @@ const Match = (() => {
   const wordEnd = (W, k) => W.some(([a, b]) => k >= a && k < b && k + 2 >= b);
   function maddKind(E, W, k, ends) {
     const w = W.findIndex(([a, b]) => k >= a && k < b), [, b] = W[w] || [0, E.length];
-    if ((ends ? ends.has(w) : w === W.length - 1) && k + 2 >= b) return 'arid';
+    // (a word inside the aya, at a stop sign, is written with its last haraka, which the stop drops)
+    if ((ends ? ends.has(w) : w === W.length - 1) && (k + 2 >= b || (k + 3 >= b && ISHAR[E[b - 1]]))) return 'arid';
     const nx = E[k + 1];
     if (nx === HAMZA) return k + 1 < b ? 'muttasil' : 'munfasil';
     if (k + 1 < b && LET[nx] && (k + 2 >= b || !ISHAR[E[k + 2]])) return 'lazim';
@@ -492,9 +493,10 @@ const Match = (() => {
   //     a short vowel inside a word drawn out into a madd of OVER_NONE or more
   const TJ_MADD = 1, TJ_GHUNNA = 2, TJ_LONG = 3, TJ_NONE = 4, TJ_SURE = 0.8;
   // how far off it must be: readers of tarteel (not the study's professionals) say a natural madd
-  // anywhere from 1 count to 4, and give a short vowel 2, often enough that those were marked in
-  // correct readings; so a natural madd is short only when not heard at all
-  const OVER_LONG = 5, OVER_NONE = 3;
+  // anywhere from 1 count to 3 (4 only at a stop sign, where it may be a stop), and give a short vowel
+  // 2, often enough that those were marked in correct readings; so a natural madd is short only when
+  // not heard at all (the professionals' are heard 1 count 17% of the time)
+  const OVER_LONG = 4, OVER_NONE = 3;
   const TJ_TYPE = [0, 5, 6, 9, 10]; // the mistake type (TYPES) of each
   // rules: { madd, ghunna, munfasil } which are checked (munfasil: held 4, not read short with qasr)
   function tajweed(E, Elen, W, H, Hlen, Hc, al, pos, end, onTj, skip, ends, rules = { madd: true, ghunna: true }) {
@@ -539,9 +541,11 @@ const Match = (() => {
         if (!out[k]) { out[k] = TJ_NONE; onTj?.('flag', TJ_NONE, Hlen[i], 0, k); }
       }
     }
-    // idgham without ghunna (مِن رَّبِّهِم: مِرَّبِّ): the ن said where it merges into the doubled ل or ر
+    // idgham (مِن رَّبِّهِم: مِرَّبِّ, without ghunna; مَن يَقُولُ: مَيييَقُول and مِن وَالٍ: مِووَال, with it):
+    // the ن said where it merges into the doubled ل or ر, or the ي or و drawn out with its ghunna (izhar)
     for (let k = 1; k + 1 < Math.min(end, E.length); k++) {
-      if (!rules.ghunna || !(E[k] === LAM || E[k] === RA) || E[k + 1] !== E[k] || !ISHAR[E[k - 1]] || skip?.has(k)) continue;
+      const into = ((E[k] === LAM || E[k] === RA) && E[k + 1] === E[k]) || ((E[k] === YA || E[k] === WAW) && E[k + 1] === E[k] && E[k + 2] === E[k]);
+      if (!rules.ghunna || !into || !ISHAR[E[k - 1]] || skip?.has(k)) continue;
       const i = al[k] ? pos[k] : -1, j = al[k + 1] ? pos[k + 1] : -1;
       const nun = (i >= 0 && H[i] === NUN && sure(i)) || (j > 0 && H[j - 1] === NUN && (i < 0 || i === j - 1) && sure(j - 1));
       onTj?.('idgham', 2, nun ? 1 : 0, 1, k);
