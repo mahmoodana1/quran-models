@@ -113,6 +113,7 @@ const Match = (() => {
   const LEAD = 0.3;   // each sound heard before the aya begins, with opt.freeLead (less than a wrong letter)
   const UNSURE = 0.75; // below this confidence, a heard sound is not trusted to show a mistake (0.6 marked twice as many words in a noisy room, for the same mistakes caught)
   const SHORT_SURE = 0.9; // a short word's haraka marked wrong only when heard this surely
+  const FAST_HAR_SURE = 0.97; // and any word's, in a fast reading (opt.fast)
   const ALT_MIN = 0.1; // a runner-up sound given at least this chance
   const WSKIP = 1.8; // a whole word left out costs at most this, however long (a long word skipped
   // otherwise costs so much that any fuzzy reading of what was heard explains it better; the
@@ -353,10 +354,12 @@ const Match = (() => {
       // the model's, not the reader's, when the rest were; and a haraka in it wrong only if heard surely
       // (opt.fast, a fast reading (hadr): every word so, sounds run together and the model hears less)
       const short = len <= 4 || !!opt.fast, most = hits >= len - 1;
-      // (fast: a haraka never marked: in hadr the model hears too few of them, and wrongly; a word
+      // (fast: a haraka only where the word was heard whole, all its sounds but one, and the
+      // haraka all but surely (FAST_HAR_SURE): in hadr the model hears many of them wrongly; a word
       // another only with under a third of its letters heard)
       let harSure = !short;
-      if (short && har >= 1 && !opt.fast) for (let k = a; k < Math.min(b, end); k++) if (type[k] === 1 && pos[k] >= 0 && (!Hc || Hc[pos[k]] >= SHORT_SURE)) harSure = true;
+      const hsure = opt.fast ? (most ? FAST_HAR_SURE : 2) : SHORT_SURE;
+      if (short && har >= 1) for (let k = a; k < Math.min(b, end); k++) if (type[k] === 1 && pos[k] >= 0 && (!Hc || Hc[pos[k]] >= hsure)) harSure = true;
       if (b <= end && b > a && hits * 3 < len) { sum = 1; t = 3; } // most of the word not heard at all: left out
       else if (letc >= 1.2 && (opt.fast ? bag(a, b) * 3 < lets : (lhits < lets * 0.5 || letc >= 2.4) && !(short && most))) { sum = letc; t = tl || 2; }
       else if (sim >= 1) { sum = sim; t = st; }
