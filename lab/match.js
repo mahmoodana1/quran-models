@@ -82,6 +82,7 @@ const Match = (() => {
   // never marked on one hearing, only from the NEAR_OFTEN-th time in the session, and not at all
   // where the reading around it goes faster than NEAR_FAST frames (40 ms) a sound
   const NEAR_OFTEN = 3, NEAR_FAST = 4;
+  const FAST_ALIKE = new Set(['دذ', 'ذد', 'تد', 'دت', 'ءا', 'اء', 'ءي', 'يء', 'ءو', 'وء']);
   const TA = new Set(['تط', 'طت']);
 
   function sub(a, b) {
@@ -125,9 +126,9 @@ const Match = (() => {
   // expected.ends (optional): the words that end an aya (where ayas are read one after another; else the last)
   // opt.tajweed: true, or { madd, ghunna, munfasil }: those tajweed rules checked (see tajweed())
   // opt.freeLead: what was heard before the aya (a basmala, an isti'adha) costs nothing
-  // opt.fast: a fast reading (hadr): a haraka marked only when heard surely, a sound of a word not
-  // heard forgiven, and a short word with a third of its sounds heard between its neighbours not a skip
-  // (any word so would let a word said in place of another pass: 91% of them caught, then 80)
+  // opt.fast: a fast reading (hadr), which the model hears far less well (sounds swallowed, others
+  // heard in their place): only what shows through that is marked: a word left out with nothing heard
+  // in its place, or another said, with under a third of its letters heard; never a haraka (see quick())
   // opt.freeStart: the reading may begin at any word (those before it: state 'pre')
   // opt.conf: how sure the model was of each heard character (0..1); a mismatch
   // on a sound it was unsure of is taken for a mishearing, never a mistake
@@ -187,6 +188,15 @@ const Match = (() => {
       let t = 0, k = 0;
       for (let x = Math.max(0, i - 4); x <= Math.min(H.length - 1, i + 4); x++) if (Hdur[x] > 0 && Hdur[x] <= 12 && !ISMADD[H[x]]) { t += Hdur[x]; k++; }
       return k >= 4 && t / k < NEAR_FAST;
+    };
+    // (fast: how many of a word's letters were heard anywhere in what was heard for it, as themselves or
+    // a letter near them: hadr runs them together, and the model hears them out of place)
+    const bag = (a, b) => {
+      let p0 = -1, p1 = -1, n = 0;
+      for (let k = a; k < Math.min(b, end); k++) if (pos[k] >= 0) { if (p0 < 0) p0 = pos[k]; p1 = pos[k] + 1; }
+      if (p0 < 0) return 0;
+      for (let k = a; k < b; k++) if (LET[E[k]]) for (let i = p0; i < p1; i++) if (H[i] === E[k] || alike.has(CH[E[k]] + CH[H[i]]) || PAIR.has(CH[E[k]] + CH[H[i]]) || FAST_ALIKE.has(CH[E[k]] + CH[H[i]])) { n++; break; }
+      return n;
     };
     const hFinal = units(heard.slice(0, finalLen)).length;
     grow();
@@ -343,10 +353,12 @@ const Match = (() => {
       // the model's, not the reader's, when the rest were; and a haraka in it wrong only if heard surely
       // (opt.fast, a fast reading (hadr): every word so, sounds run together and the model hears less)
       const short = len <= 4 || !!opt.fast, most = hits >= len - 1;
+      // (fast: a haraka never marked: in hadr the model hears too few of them, and wrongly; a word
+      // another only with under a third of its letters heard)
       let harSure = !short;
-      if (short && har >= 1) for (let k = a; k < Math.min(b, end); k++) if (type[k] === 1 && pos[k] >= 0 && (!Hc || Hc[pos[k]] >= SHORT_SURE)) harSure = true;
+      if (short && har >= 1 && !opt.fast) for (let k = a; k < Math.min(b, end); k++) if (type[k] === 1 && pos[k] >= 0 && (!Hc || Hc[pos[k]] >= SHORT_SURE)) harSure = true;
       if (b <= end && b > a && hits * 3 < len) { sum = 1; t = 3; } // most of the word not heard at all: left out
-      else if (letc >= 1.2 && (lhits < lets * 0.5 || letc >= 2.4) && !(short && most)) { sum = letc; t = tl || 2; }
+      else if (letc >= 1.2 && (opt.fast ? bag(a, b) * 3 < lets : (lhits < lets * 0.5 || letc >= 2.4) && !(short && most))) { sum = letc; t = tl || 2; }
       else if (sim >= 1) { sum = sim; t = st; }
       else if (har >= 1 && harSure) { sum = har; t = 1; }
       const at = [pos[a], Math.min(b, end) > a ? pos[Math.min(b, end) - 1] + 1 : pos[a]]; // where in the heard units
@@ -408,9 +420,40 @@ const Match = (() => {
   // a short word "left out" between two said right, with sounds heard between them: said, quickly
   // (the model's garble of it); one really left out leaves next to nothing between its neighbours.
   // After the swap is looked for (a word said elsewhere is first marked left out)
-  // (opt.fast: with a third of its sounds or more heard between)
+  // (opt.fast: any words "left out" one after another, between two said, with sounds heard in their
+  // place, a quarter of theirs or more: said, swallowed; one really left out leaves nothing there)
   function quick(expected, st, heard, opt = {}) {
     let out = st, H = null;
+    if (opt.fast) {
+      const said = x => (x.state === 'ok' || x.state === 'err') && x.at && x.type !== 'missing';
+      // (or no sound heard there, but the time of one: from the last sound before to the first after,
+      // longer than two sounds at this reading's pace and half the words' own: the model heard
+      // nothing it could write, a word left out leaves no time)
+      let T = null;
+      if (opt.at) {
+        T = []; let u = -1, prev = null, c = 0;
+        for (const ch of heard) { if (!(MADD.has(ch) && ch === prev)) T[++u] = opt.at[c]; prev = ch; c++; }
+      }
+      const timed = (i0, i1, n) => {
+        if (!T || i0 < 0 || i1 + 1 >= T.length || T[i0] == null || T[i1 + 1] == null) return false;
+        let t = 0, k = 0;
+        for (let x = Math.max(0, i0 - 8); x < Math.min(T.length - 1, i1 + 9); x++) { const d = T[x + 1] - T[x]; if (d > 0 && d <= 12) { t += d; k++; } }
+        const pace = k >= 6 ? t / k : 3;
+        return T[i1 + 1] - T[i0] >= pace * (2 + n / 2);
+      };
+      for (let wi = 1; wi + 1 < st.length; wi++) {
+        if (st[wi].type !== 'missing' || !said(st[wi - 1])) continue;
+        let wj = wi; while (wj + 1 < st.length && st[wj + 1].type === 'missing') wj++;
+        if (wj + 1 >= st.length || !said(st[wj + 1])) { wi = wj; continue; }
+        const g = st[wj + 1].at[0] - st[wi - 1].at[1], n = expected._w[wj][1] - expected._w[wi][0];
+        if ((g >= 1 && g <= n + 2) || timed(st[wi - 1].at[1] - 1, st[wj + 1].at[0], n)) {
+          if (out === st) { out = st.slice(); out.cost = st.cost; }
+          for (let k = wi; k <= wj; k++) out[k] = { state: st[k].state === 'err' ? 'ok' : st[k].state, heard: st[k].heard, at: st[k].at };
+        }
+        wi = wj;
+      }
+      return out;
+    }
     for (let wi = 1; wi + 1 < st.length; wi++) {
       const x = st[wi], p = st[wi - 1], q = st[wi + 1], [a, b] = expected._w[wi];
       if (x.type !== 'missing' || p.state !== 'ok' || q.state !== 'ok' || !p.at || !q.at || b - a > 4) continue;
