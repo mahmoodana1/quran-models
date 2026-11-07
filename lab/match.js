@@ -601,9 +601,12 @@ const Match = (() => {
       if (!rules.madd && !rules.over) continue;
       // (ī or ū heard as ay or aw: the madd heard as its letter, said)
       const diph = i >= 0 && k > 0 && DIPH.get(E[k - 1])?.[0] === E[k] && H[i] === DIPH.get(E[k - 1])[1];
-      if (rules.madd && L.miss && kind === 'tabii' && !hl && !diph && around && after && (i < 0 || sure(i))) out[k] = TJ_MADD;
+      // a madd not heard at all (a fatha where an alif should be): with rules.goneOften, marked only once
+      // this reader is heard so often enough (the caller counts each one: rules.gone(k), rules.goneOften(k))
+      const gone = () => { if (!rules.goneOften) return true; rules.gone?.(k); return rules.goneOften(k); };
+      if (rules.madd && L.miss && kind === 'tabii' && !hl && !diph && around && after && (i < 0 || sure(i)) && gone()) out[k] = TJ_MADD;
       if (rules.over && kind === 'tabii' && hl >= L.long && i >= 0 && sure(i) && !wordEnd(W, k) && atLeast(i, 1.75)) out[k] = TJ_LONG;
-      if (rules.madd && (kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= (L.t && Hdur ? L.short : 1) && i >= 0 && sure(i) && under(i, 1.25)) out[k] = TJ_MADD;
+      if (rules.madd && (kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= (L.t && Hdur ? L.short : 1) && i >= 0 && sure(i) && under(i, 1.25) && (hl || gone())) out[k] = TJ_MADD;
       if (out[k]) onTj?.('flag', out[k], hl, 0, k);
     }
     for (let k = 0; k < Math.min(end, E.length);) {
