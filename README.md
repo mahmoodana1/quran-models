@@ -46,5 +46,6 @@ The weights are a derivative of `hifzguide-muaalem-mini`, so they are licensed u
 
 - `An0xity/whisper-base-ar-quran-onnx-timestamped` (8-bit): an ONNX export of [`tarteel-ai/whisper-base-ar-quran`](https://huggingface.co/tarteel-ai/whisper-base-ar-quran).
 - `Sharjeelbaig/whisper-tiny-ar-quran-onnx` (encoder fp32, decoder 8-bit): an ONNX export of [`tarteel-ai/whisper-tiny-ar-quran`](https://huggingface.co/tarteel-ai/whisper-tiny-ar-quran).
+- `deepdml/whisper-tiny-ar-quran-mix-norm` (encoder fp32, decoder 8-bit in its word table and last projection only): our ONNX export of [`deepdml/whisper-tiny-ar-quran-mix-norm`](https://huggingface.co/deepdml/whisper-tiny-ar-quran-mix-norm) (`tools/whisper_mix_norm.py`). In Hafs, a second opinion on fast readings (hadr), which it hears far better than the phonetic model.
 
-Both are Apache-2.0, like the Tarteel models they come from.
+All three are Apache-2.0, like the models they come from.
