@@ -240,6 +240,10 @@ const Match = (() => {
     const wordEnd = new Int32Array(m + 1).fill(-1);
     for (const [a, b] of expected._w) if (b > a) wordEnd[b] = a;
     if (opt.freeStart) for (const [a] of expected._w) if (a > 0 && a < m) { cost[a] = 0; back[a] = 0; }
+    // both: the reading may begin at any word after any lead heard (a false start, said and left,
+    // before the aya read: the words before it not all counted left out) (back 6)
+    const leadStart = opt.freeStart && opt.freeLead ? new Uint8Array(m + 1) : null;
+    if (leadStart) for (const [a] of expected._w) if (a > 0 && a < m) leadStart[a] = 1;
     // words (in units), and for each row and word, where a going-back to that
     // word's start came from (-1: none); jumps only ever land on a word's start
     const ws = expected._w.filter(([a, b]) => b > a), nw = ws.length, jump = new Int32Array((n + 1) * Math.max(1, nw)).fill(-1);
@@ -255,6 +259,7 @@ const Match = (() => {
         if (d < c) { c = d; b = 2; }
         const s = cost[p + j] + insc(i, j, h, ic);
         if (s < c) { c = s; b = 3; }
+        if (leadStart?.[j] && cost[r] < c) { c = cost[r]; b = 6; }
         cost[r + j] = c; back[r + j] = b;
       }
       // going back: after a word, the reader may start again from up to REPEAT_WORDS
@@ -279,12 +284,13 @@ const Match = (() => {
     const al = new Uint8Array(m); // the unit was lined up with a heard one (pos: which)
     const hit = new Uint8Array(m); // the unit was heard (as itself, or as a sound it is confused with)
     const seen = new Uint8Array(m + 1); // judged already: from a later attempt (said again), which is the one that counts
-    let i = n, j = end, steps = 0, start = 0;
+    let i = n, j = end, steps = 0, start = 0, back0 = m; // back0: the earliest word gone back to
     while (i > 0 || j > 0) {
       if (i === 0 && opt.freeStart && back[j] === 0) { start = j; break; }
       if (++steps > (n + m) * 3 + 64) break; // can't happen; never hang the page if it did
       const b = back[i * W + j];
-      if (b === 4) { const f = jump[i * nw + wordAt[j]]; if (f < 0 || f <= j) break; j = f; continue; }
+      if (b === 6) { start = j; j = 0; continue; } // (begun here, after the lead)
+      if (b === 4) { const f = jump[i * nw + wordAt[j]]; if (f < 0 || f <= j) break; back0 = Math.min(back0, j); j = f; continue; }
       if (b === 5) { // the word ending here left out whole
         const a = wordEnd[j];
         if (a < 0) break;
@@ -330,6 +336,9 @@ const Match = (() => {
         i--;
       }
     }
+    // begun at a word, then gone back to one before it (a false start: the words of another aya
+    // after the one read, said and left): the reading is from that one, not from the false start
+    if (opt.freeStart && back0 < start) start = back0;
     const refs = expected.refs;
     const tj = opt.tajweed || opt.onTj ? tajweed(E, expected._len, expected._w, H, Hlen, Hc, al, pos, end, opt.onTj, opt.tjSkip || expected._tj, expected.ends ? new Set(expected.ends) : null, typeof opt.tajweed === 'object' ? opt.tajweed : undefined, Hdur) : null;
     const out = expected._w.map(([a, b], wi) => {
