@@ -36,6 +36,17 @@ Every time at least 0.25 s of new audio has come in, the last 2.5 s are read aga
 
 In Chromium on 4 cores this takes about 250 ms per update, and gives the same text as reading the whole aya at once. A 2 s window starts to make mistakes.
 
+### As a stream
+
+Reading the last 4 s again for every update computes each second of audio four times or more. `muaalem/stream/s8.onnx` is the same model, with the same 8-bit weights, cut so that an update computes only the frames that are not settled yet: the last second, and what has come in since. Those frames attend to the layer states of the 2 s before them, which are kept from the updates before instead of being computed again (per layer: the attention's input and values, and the 30 frames the causal convolution looks back on; then the adapter's).
+
+- An update costs a third to a half of a 4 s window (in Chromium on one core: 480 ms for 0.25 s of new audio, against 1330 ms).
+- The text is as close to the truth as with windows, or closer. On 12 ayat by three reciters, read every 0.5 s: 5, 9 and 5 sounds wrong with the stream, against 7, 10 and 9 with windows.
+- The model hears a frame worse the further it is into its input (past 5 s or so), so the cache is 2 s (`cache` in the manifest, in frames) and a catch-up read is at most 3 s.
+- The file is the graph alone (760 KB). Its weights are the ones inside `q8.onnx`: each is external data pointing at its bytes there (`location`, `offset`, `length`), so a device that has the 8-bit model downloads nothing more. Load it with the joined `q8.onnx` given as that external file.
+
+How it is made (`tools/`): `stream_export.py` (the cut model, checked against the whole one), `stream_quant.py` (8-bit, as `q8` is), `stream_link.py` (the weights pointed into `q8.onnx`), `stream_probe.py` (its stand-in for timing a device, `probe/s8.onnx`).
+
 ## Licence
 
 The weights are a derivative of `hifzguide-muaalem-mini`, so they are licensed under **AGPL-3.0** (`LICENSE`); see `muaalem/NOTICE.md` for the lineage (Muaalem by obadx, MIT). The lab and the conversion scripts are AGPL-3.0 as well.
