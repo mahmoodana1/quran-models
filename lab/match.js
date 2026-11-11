@@ -669,11 +669,14 @@ const Match = (() => {
       if (rules.madd && (kind === 'muttasil' || kind === 'lazim' || (kind === 'munfasil' && rules.munfasil)) && Elen[k] >= 4 && hl <= (L.t && Hdur ? L.short : 1) && i >= 0 && sure(i) && under(i, 1.25) && (hl || gone())) out[k] = TJ_MADD;
       if (out[k]) onTj?.('flag', out[k], hl, 0, k);
     }
+    // (after a word with a stop sign the reader may stop: its tanween or ن is then not merged into
+    // the next word, and there is no ghunna to give: طِبَاقًاۖ مَّا read طِبَاقَا | مَا)
+    const stopAt = ends ? [...ends].filter(w => w < W.length - 1).map(w => W[w][1]) : [];
     for (let k = 0; k < Math.min(end, E.length);) {
       if (!NASAL.has(E[k])) { k++; continue; }
       let e = k, ge = 0, lo = Infinity, hi = -1;
       while (e < E.length && NASAL.has(E[e])) { ge += Elen[e]; if (al[e]) { lo = Math.min(lo, pos[e]); hi = Math.max(hi, pos[e]); } e++; }
-      if (rules.ghunna && ge >= 3 && e <= end && !skip?.has(k)) {
+      if (rules.ghunna && ge >= 3 && e <= end && !skip?.has(k) && !stopAt.some(b => k <= b + 1 && e >= b - 1)) {
         let gh = 0, ok = hi >= 0;
         if (hi >= 0) {
           while (lo > 0 && NASAL.has(H[lo - 1])) lo--;
