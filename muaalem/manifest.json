@@ -51,5 +51,18 @@
     }
    ]
   }
+ },
+ "stream": {
+  "s8": {
+   "about": "the model read as a stream (a read computes only the frames not yet settled, from cached layer states): a graph alone, its weights the ones inside the q8 file (external data: location, offset, length)",
+   "weights": "q8",
+   "location": "q8.onnx",
+   "cache": 100,
+   "graph": {
+    "path": "muaalem/stream/s8.onnx",
+    "bytes": 760037,
+    "sha256": "ee19d4556450f4993657fbf4b4e8b5df4d74bebf0a22950658bd42d6910ca20e"
+   }
+  }
  }
 }
