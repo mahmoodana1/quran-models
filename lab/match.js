@@ -307,7 +307,10 @@ const Match = (() => {
         else if (opt.letters && !fine && (!Hc || Hc[i - 1] >= LETTER_OFTEN)) {
           const pk = CH[E[j - 1]] + CH[H[i - 1]], pt = PAIR.get(pk), e0 = E[j - 1], c = Hc ? Hc[i - 1] : 1;
           const nasal = (e0 === NUN || e0 === MIM) && (edge[j - 1] === 1 || (j > 1 && (NASAL.has(E[j - 2]))) || (j < m && NASAL.has(E[j])) || (i > 1 && H[i - 2] === GH) || (i < n && (H[i] === GH || NASAL.has(H[i]))));
-          if (pt && (pt === 7 ? opt.letters.heavy : opt.letters.near) && !nasal) {
+          // (ذ after a hidden ن, لِيُنذِرَ: the ghunna before it makes the model hear ظ from correct
+          // reciters, 2 times in 81: not marked)
+          const hidden = pk === 'ذظ' && j > 1 && E[j - 2] === GH;
+          if (pt && (pt === 7 ? opt.letters.heavy : opt.letters.near) && !nasal && !hidden) {
             if (pt === 7) {
               opt.letters.heard?.(pk, j - 1);
               if (c >= (TA.has(pk) ? TA_SURE : LETTER_SURE) || opt.letters.often?.(pk)) { bad[j - 1] += 1; type[j - 1] ||= pt; }
